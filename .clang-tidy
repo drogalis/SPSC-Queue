@@ -1,0 +1,17 @@
+Checks: 'cppcoreguidelines-*,
+clang-*
+concurrency-*
+performance-*,
+modernize-*,
+google-*,
+misc-*
+cert-*,
+readability-*,
+portability-*
+clang-analyzer-*,
+-modernize-use-trailing-return-type,
+-misc-non-private-member-variables-in-classes,
+'
+
+WarningsAsErrors: false
+
