@@ -40,8 +40,8 @@ private:
   alignas(kCacheLineSize) std::size_t writeIdxCache_ {0};
 
 public:
-  explicit SPSC_Queue(std::size_t const capacity,
-                      Allocator const& allocator = Allocator())
+  explicit SPSC_Queue(const std::size_t capacity,
+                      const Allocator& allocator = Allocator())
       : capacity_(capacity), allocator_(allocator)
   {
     // Needs at least one element
@@ -61,14 +61,14 @@ public:
 
   ~SPSC_Queue()
   {
-    while (condition) {}
+    while (try_pop()) {}
     std::allocator_traits<Allocator>::deallocate(allocator_, slots_,
                                                  capacity_ + 2 * kPadding);
   }
 
   // non-copyable and non-movable
-  SPSC_Queue(SPSC_Queue const& lhs)            = delete;
-  SPSC_Queue& operator=(SPSC_Queue const& lhs) = delete;
+  SPSC_Queue(const SPSC_Queue& lhs)            = delete;
+  SPSC_Queue& operator=(const SPSC_Queue& lhs) = delete;
   SPSC_Queue(SPSC_Queue&& lhs)                 = delete;
   SPSC_Queue& operator=(SPSC_Queue&& lhs)      = delete;
 
@@ -77,7 +77,7 @@ public:
       std::is_nothrow_constructible<T, Args&&...>::value)
   {
     static_assert(std::is_constructible<T, Args&&...>::value,
-                  "T must be constructable with Args&&...");
+                  "T must be constructible with Args&&...");
     auto const writeIdx = writeIdx_.load(std::memory_order_relaxed);
     auto nextWriteIdx   = writeIdx + 1;
     if (nextWriteIdx == capacity_)
@@ -97,7 +97,7 @@ public:
       std::is_nothrow_constructible<T, Args&&...>::value)
   {
     static_assert(std::is_constructible<T, Args&&...>::value,
-                  "T must be constructable with Args&&...");
+                  "T must be constructible with Args&&...");
     auto const writeIdx = writeIdx_.load(std::memory_order_acquire);
     auto nextWriteIdx   = writeIdx + 1;
     if (nextWriteIdx == capacity_)
@@ -117,20 +117,64 @@ public:
     return true;
   }
 
-  void push(T const& val) noexcept(std::is_nothrow_copy_constructible<T>::value)
+  void push(const T& val) noexcept(std::is_nothrow_copy_constructible<T>::value)
   {
     static_assert(std::is_copy_constructible<T>::value,
                   "T must be copy constructable");
     emplace(val);
   }
 
-  bool pop() noexcept
+  template <typename P, typename = typename std::enable_if<
+                            std::is_constructible<T, P&&>::value>::type>
+  void push(P&& val) noexcept(std::is_nothrow_constructible<T, P&&>::value)
   {
-    auto const readIdx = readIdx_.load(std::memory_order_relaxed);
-    if (readIdx == writeIdx_.load(std::memory_order_acquire))
+    emplace(std::forward<P>(val));
+  }
+
+  [[nodiscard]] bool try_push(const T& val) noexcept(
+      std::is_nothrow_copy_constructible<T>::value)
+  {
+    static_assert(std::is_copy_constructible<T>::value,
+                  "T must be nothrow copy constructible");
+    return try_emplace(val);
+  }
+
+  template <typename P, typename = typename std::enable_if<
+                            std::is_constructible<T, P&&>::value>::type>
+  [[nodiscard]] bool try_push(P&& val) noexcept(
+      std::is_nothrow_constructible<T, P&&>::value)
+  {
+    return try_emplace(std::forward<P>(val));
+  }
+
+  [[nodiscard]] T* front() noexcept
+  {
+    const auto readIdx = readIdx_.load(std::memory_order_relaxed);
+    if (readIdx == writeIdxCache_)
     {
-      return false;
+      writeIdxCache_ = writeIdx_.load(std::memory_order_acquire);
+      if (readIdx == writeIdxCache_)
+      {
+        return nullptr;
+      }
     }
+    return &slots_[readIdx + kPadding];
+  }
+
+  bool try_pop() noexcept
+  {
+    static_assert(std::is_nothrow_destructible<T>::value,
+                  "T must be nothrow destructible");
+    const auto readIdx = readIdx_.load(std::memory_order_relaxed);
+    if (readIdx == writeIdxCache_)
+    {
+      writeIdxCache_ = writeIdx_.load(std::memory_order_acquire);
+      if (readIdx == writeIdxCache_)
+      {
+        return false;
+      }
+    }
+    slots_[readIdx + kPadding].~T();
     auto nextReadIdx = readIdx + 1;
     if (nextReadIdx == capacity_)
     {
