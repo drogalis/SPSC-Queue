@@ -1,12 +1,16 @@
-
-// Andrew Drogalis Copyright (c) 2024
+// Andrew Drogalis Copyright (c) 2024, GNU 3.0 Licence
+//
+// Inspired from Erik Rigtorp
+// Significant Modifications / Improvements
+// E.G
+// 1) Removed Raw Pointers 
+// 2) Utilized Vector for RAII memory management
 
 #ifndef DRO_SPSC_QUEUE
 #define DRO_SPSC_QUEUE
 
 #include <atomic>
 #include <cassert>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -23,26 +27,30 @@ template <typename T, typename Allocator = std::allocator<T>> class SPSC_Queue
 {
 private:
 #ifdef __cpp_lib_hardware_interference_size
-  static constexpr std::size_t kCacheLineSize =
+  static constexpr std::size_t cacheLineSize =
       std::hardware_destructive_interference_size;
 #else
-  static constexpr std::size_t kCacheLineSize = 64;
+  static constexpr std::size_t cacheLineSize = 64;
 #endif
 
-  static constexpr std::size_t kPadding = (kCacheLineSize - 1) / sizeof(T) + 1;
-  std::size_t capacity_;
-  T* slots_;
-  Allocator allocator_ [[no_unique_address]];
+  struct alignas(cacheLineSize) Slot
+  {
+    T data_;
+    explicit Slot(T data) : data_(data) {}
+  };
 
-  alignas(kCacheLineSize) std::atomic<std::size_t> readIdx_ {0};
-  alignas(kCacheLineSize) std::size_t readIdxCache_ {0};
-  alignas(kCacheLineSize) std::atomic<std::size_t> writeIdx_ {0};
-  alignas(kCacheLineSize) std::size_t writeIdxCache_ {0};
+  std::size_t capacity_;
+  std::vector<Slot, Allocator> buffer_;
+
+  alignas(cacheLineSize) std::atomic<std::size_t> readIdx_ {0};
+  alignas(cacheLineSize) std::size_t readIdxCache_ {0};
+  alignas(cacheLineSize) std::atomic<std::size_t> writeIdx_ {0};
+  alignas(cacheLineSize) std::size_t writeIdxCache_ {0};
 
 public:
   explicit SPSC_Queue(const std::size_t capacity,
                       const Allocator& allocator = Allocator())
-      : capacity_(capacity), allocator_(allocator)
+      : capacity_(capacity), buffer_(allocator)
   {
     // Needs at least one element
     if (capacity_ < 1)
@@ -51,19 +59,16 @@ public:
     }
     ++capacity_;// one extra element
     // Avoids overflow of size_t
-    if (capacity_ > SIZE_MAX - 2 * kPadding)
+    if (capacity_ > SIZE_MAX)
     {
-      capacity_ = SIZE_MAX - 2 * kPadding;
+      capacity_ = SIZE_MAX;
     }
-    slots_ = std::allocator_traits<Allocator>::allocate(
-        allocator_, capacity_ + 2 * kPadding);
+    buffer_.resize(capacity_);
   }
 
   ~SPSC_Queue()
   {
     while (try_pop()) {}
-    std::allocator_traits<Allocator>::deallocate(allocator_, slots_,
-                                                 capacity_ + 2 * kPadding);
   }
 
   // non-copyable and non-movable
@@ -88,7 +93,7 @@ public:
     {
       readIdxCache_ = readIdx_.load(std::memory_order_acquire);
     }
-    new (&slots_[writeIdx + kPadding]) T(std::forward<Args>(args)...);
+    buffer_[writeIdx] = T(std::forward<Args>(args)...);
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
   }
 
@@ -112,7 +117,7 @@ public:
         return false;
       }
     }
-    new (&slots_[writeIdx + kPadding]) T(std::forward<Args>(args)...);
+    buffer_[writeIdx] = T(std::forward<Args>(args)...);
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
     return true;
   }
@@ -158,10 +163,10 @@ public:
         return nullptr;
       }
     }
-    return &slots_[readIdx + kPadding];
+    return &buffer_[readIdx];
   }
 
-  bool try_pop() noexcept
+  [[nodiscard]] bool try_pop() noexcept
   {
     static_assert(std::is_nothrow_destructible<T>::value,
                   "T must be nothrow destructible");
@@ -174,7 +179,7 @@ public:
         return false;
       }
     }
-    slots_[readIdx + kPadding].~T();
+    buffer_[readIdx].~T();
     auto nextReadIdx = readIdx + 1;
     if (nextReadIdx == capacity_)
     {
