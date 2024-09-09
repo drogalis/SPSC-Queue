@@ -3,7 +3,7 @@
 // Inspired from Erik Rigtorp
 // Significant Modifications / Improvements
 // E.G
-// 1) Removed Raw Pointers 
+// 1) Removed Raw Pointers
 // 2) Utilized Vector for RAII memory management
 
 #ifndef DRO_SPSC_QUEUE
@@ -23,24 +23,49 @@
 namespace dro
 {
 
-template <typename T, typename Allocator = std::allocator<T>> class SPSC_Queue
-{
-private:
 #ifdef __cpp_lib_hardware_interference_size
-  static constexpr std::size_t cacheLineSize =
-      std::hardware_destructive_interference_size;
+static constexpr std::size_t cacheLineSize =
+    std::hardware_destructive_interference_size;
 #else
-  static constexpr std::size_t cacheLineSize = 64;
+static constexpr std::size_t cacheLineSize = 64;
 #endif
 
-  struct alignas(cacheLineSize) Slot
-  {
-    T data_;
-    explicit Slot(T data) : data_(data) {}
-  };
+template <typename K> struct alignas(cacheLineSize) Slot
+{
+  K data_;
 
+  template <typename... Args>
+  explicit Slot(Args&&... args) : data_(K(std::forward<Args>(args)...))
+  {
+  }
+  ~Slot() { ~K(); }
+  Slot(const Slot& lhs) : data_(lhs.data_) {}
+  Slot& operator=(const Slot& lhs)
+  {
+    if (*this != lhs)
+    {
+      data_ = lhs.data_;
+    }
+    return *this;
+  };
+  Slot(Slot&& lhs) : data_(std::move(lhs.data_)) {}
+  Slot& operator=(Slot&& lhs)
+  {
+    if (*this != lhs)
+    {
+      data_ = std::move(lhs.data_);
+    }
+    return *this;
+  };
+  bool operator!=(Slot& lhs) { return data_ != lhs.data_; }
+};
+
+template <typename T, typename Allocator = std::allocator<Slot<T>>>
+class SPSC_Queue
+{
+private:
   std::size_t capacity_;
-  std::vector<Slot, Allocator> buffer_;
+  std::vector<Slot<T>, Allocator> buffer_;
 
   alignas(cacheLineSize) std::atomic<std::size_t> readIdx_ {0};
   alignas(cacheLineSize) std::size_t readIdxCache_ {0};
@@ -93,7 +118,7 @@ public:
     {
       readIdxCache_ = readIdx_.load(std::memory_order_acquire);
     }
-    buffer_[writeIdx] = T(std::forward<Args>(args)...);
+    buffer_[writeIdx] = Slot<T>(std::forward<Args>(args)...);
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
   }
 
@@ -117,7 +142,7 @@ public:
         return false;
       }
     }
-    buffer_[writeIdx] = T(std::forward<Args>(args)...);
+    buffer_[writeIdx] = Slot<T>(std::forward<Args>(args)...);
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
     return true;
   }
@@ -163,7 +188,7 @@ public:
         return nullptr;
       }
     }
-    return &buffer_[readIdx];
+    return &buffer_[readIdx].data_;
   }
 
   [[nodiscard]] bool try_pop() noexcept
@@ -179,7 +204,7 @@ public:
         return false;
       }
     }
-    buffer_[readIdx].~T();
+    buffer_[readIdx].~Slot();
     auto nextReadIdx = readIdx + 1;
     if (nextReadIdx == capacity_)
     {
@@ -187,6 +212,22 @@ public:
     }
     readIdx_.store(nextReadIdx, std::memory_order_release);
     return true;
+  }
+
+  void pop() noexcept
+  {
+    static_assert(std::is_nothrow_destructible<T>::value,
+                  "T must be nothrow destructible");
+    auto const readIdx = readIdx_.load(std::memory_order_relaxed);
+    assert(writeIdx_.load(std::memory_order_acquire) != readIdx &&
+           "Can only call pop() after front() has returned a non-nullptr");
+    buffer_[readIdx].~Slot();
+    auto nextReadIdx = readIdx + 1;
+    if (nextReadIdx == capacity_)
+    {
+      nextReadIdx = 0;
+    }
+    readIdx_.store(nextReadIdx, std::memory_order_release);
   }
 
   [[nodiscard]] std::size_t size() const noexcept
