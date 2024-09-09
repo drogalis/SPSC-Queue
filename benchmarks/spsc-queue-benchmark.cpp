@@ -1,6 +1,7 @@
 // Andrew Drogalis
 
 #include "../src/spsc-queue.hpp"
+#include "SPSCQueue.h"
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
@@ -19,7 +20,7 @@ void pinThread(int cpu)
   }
   cpu_set_t cpu_set;
   CPU_ZERO(&cpu_set);
-  CPU_SET(cpi, &cpu_set);
+  CPU_SET(cpu, &cpu_set);
   if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpu_set) == 1)
   {
     perror("pthread_setaffinity_np");
@@ -29,15 +30,15 @@ void pinThread(int cpu)
 
 int main(int argc, char** argv)
 {
-  using namespace dro;
+  using namespace rigtorp;
 
   int cpu1 {-1};
   int cpu2 {-1};
 
   if (argc == 3)
   {
-    cpu1 = std::stoi(argv[0]);
-    cpu2 = std::stoi(argv[1]);
+    cpu1 = std::stoi(argv[1]);
+    cpu2 = std::stoi(argv[2]);
   }
 
   const std::size_t queueSize {10'000'000};
@@ -52,9 +53,10 @@ int main(int argc, char** argv)
         while (! q.front()) {}
         if (*q.front() != i)
         {
-          throw std::runtime_error("");
+          // throw std::runtime_error("Value not equal");
         }
-        q.try_pop();
+        
+        q.pop();
       }
     });
 
@@ -62,24 +64,25 @@ int main(int argc, char** argv)
 
     auto start = std::chrono::steady_clock::now();
     for (int i {}; i < iters; ++i) { q.emplace(); }
-    t.join();
+    thrd.join();
     auto stop = std::chrono::steady_clock::now();
 
     std::cout << iters * 1'000'000 /
                      std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
                                                                           start)
-                         .count();
-    << " ops/ms \n";
+                         .count()
+              << " ops/ms \n";
   }
 
   {
     SPSC_Queue<int> q1(queueSize), q2(queueSize);
-    auto t = std::thread([&]() {
+    auto thrd = std::thread([&]() {
       pinThread(cpu1);
       for (int i {}; i < iters; ++i)
       {
         while (! q1.front()) {}
-        q2.emplace(*q1.front()), q1.try_pop();
+        q2.emplace(*q1.front());
+        q1.pop();
       }
     });
 
@@ -90,10 +93,10 @@ int main(int argc, char** argv)
     {
       q1.emplace(i);
       while (! q2.front()) {}
-      q2.try_pop();
+       q2.pop();
     }
     auto stop = std::chrono::steady_clock::now();
-    t.join();
+    thrd.join();
     std::cout << std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
                                                                       start)
                          .count() /
