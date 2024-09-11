@@ -29,8 +29,6 @@ IncludeBlocks: Preserve
 IndentWidth: '2'
 Language: Cpp
 PointerAlignment: Left
-# Careful With Qualifier Alignment [Requires Manual Check]
-QualifierAlignment: Right
 SortIncludes: 'true'
 SortUsingDeclarations: 'true'
 SpaceAfterLogicalNot: 'true'
