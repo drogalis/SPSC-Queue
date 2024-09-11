@@ -5,6 +5,9 @@
 // E.G
 // 1) Removed Raw Pointers
 // 2) Utilized Vector for RAII memory management
+// 3) Modified API to use try_pop instead of pop
+//     a) This prevents two function calls for one task
+//     b) 2x performance boost for Debug by removing assert
 
 #ifndef DRO_SPSC_QUEUE
 #define DRO_SPSC_QUEUE
@@ -38,9 +41,17 @@ template <typename K> struct alignas(cacheLineSize) Slot
   explicit Slot(Args&&... args) : data_(K(std::forward<Args>(args)...))
   {
   }
-  ~Slot() { ~K(); }
-  Slot(const Slot& lhs) : data_(lhs.data_) {}
-  Slot& operator=(const Slot& lhs)
+
+  void destroy() { data_.~K(); }
+
+  ~Slot() { destroy(); }
+  // These are required for vector static assert, but are never invoked
+  Slot(const Slot& lhs) noexcept(std::is_nothrow_copy_constructible<K>::value)
+      : data_(lhs.data_)
+  {
+  }
+  Slot& operator=(const Slot& lhs) noexcept(
+      std::is_nothrow_copy_assignable<K>::value)
   {
     if (*this != lhs)
     {
@@ -48,8 +59,12 @@ template <typename K> struct alignas(cacheLineSize) Slot
     }
     return *this;
   };
-  Slot(Slot&& lhs) : data_(std::move(lhs.data_)) {}
-  Slot& operator=(Slot&& lhs)
+  Slot(Slot&& lhs) noexcept(std::is_nothrow_move_constructible<K>::value)
+      : data_(std::move(lhs.data_))
+  {
+  }
+  Slot& operator=(Slot&& lhs) noexcept(
+      std::is_nothrow_move_assignable<K>::value)
   {
     if (*this != lhs)
     {
@@ -212,22 +227,6 @@ public:
     }
     readIdx_.store(nextReadIdx, std::memory_order_release);
     return true;
-  }
-
-  void pop() noexcept
-  {
-    static_assert(std::is_nothrow_destructible<T>::value,
-                  "T must be nothrow destructible");
-    auto const readIdx = readIdx_.load(std::memory_order_relaxed);
-    assert(writeIdx_.load(std::memory_order_acquire) != readIdx &&
-           "Can only call pop() after front() has returned a non-nullptr");
-    buffer_[readIdx].~Slot();
-    auto nextReadIdx = readIdx + 1;
-    if (nextReadIdx == capacity_)
-    {
-      nextReadIdx = 0;
-    }
-    readIdx_.store(nextReadIdx, std::memory_order_release);
   }
 
   [[nodiscard]] std::size_t size() const noexcept
