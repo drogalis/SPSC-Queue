@@ -133,7 +133,7 @@ public:
     {
       readIdxCache_ = readIdx_.load(std::memory_order_acquire);
     }
-    buffer_[writeIdx] = Slot<T>(std::forward<Args>(args)...);
+    buffer_[writeIdx].data_ = std::move(T(std::forward<Args>(args)...));
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
   }
 
@@ -143,7 +143,7 @@ public:
   {
     static_assert(std::is_constructible<T, Args&&...>::value,
                   "T must be constructible with Args&&...");
-    auto const writeIdx = writeIdx_.load(std::memory_order_acquire);
+    auto const writeIdx = writeIdx_.load(std::memory_order_relaxed);
     auto nextWriteIdx   = writeIdx + 1;
     if (nextWriteIdx == capacity_)
     {
@@ -157,7 +157,7 @@ public:
         return false;
       }
     }
-    buffer_[writeIdx] = Slot<T>(std::forward<Args>(args)...);
+    buffer_[writeIdx].data_ = std::move(T(std::forward<Args>(args)...));
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
     return true;
   }
@@ -219,7 +219,7 @@ public:
         return false;
       }
     }
-    buffer_[readIdx].~Slot();
+    buffer_[readIdx].destroy();
     auto nextReadIdx = readIdx + 1;
     if (nextReadIdx == capacity_)
     {
