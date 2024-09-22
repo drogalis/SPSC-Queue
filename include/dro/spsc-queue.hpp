@@ -2,13 +2,12 @@
 //
 // Inspired from Erik Rigtorp
 // Significant Modifications / Improvements
-// 
+//
 // 1) Removed Raw Pointers
 // 2) Utilized Vector for RAII memory management
 // 3) Modified API to use try_pop instead of pop
-//     a) This prevents two function calls for one task
-//     b) Removing assert from Debug Mode
-// 4) Used copy assignment instead of placement new 
+// 4) Used copy assignment instead of placement new
+// 5) Added C++20 concepts
 
 #ifndef DRO_SPSC_QUEUE
 #define DRO_SPSC_QUEUE
@@ -17,6 +16,7 @@
 #include <atomic>
 #include <cassert>
 #include <climits>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -37,14 +37,27 @@ static constexpr std::size_t cacheLineSize =
 static constexpr std::size_t cacheLineSize = 64;
 #endif
 
-template <typename T, typename Allocator = std::allocator<T>> class SPSC_Queue
+template <typename T>
+concept SPSC_Type =
+    std::is_default_constructible<T>::value &&
+    std::is_nothrow_destructible<T>::value &&
+    (std::is_move_assignable_v<T> || std::is_copy_assignable_v<T>);
+
+template <typename T, typename... Args>
+concept SPSC_NoThrow_Type =
+    std::is_nothrow_constructible_v<T, Args&&...> &&
+    ((std::is_nothrow_copy_assignable_v<T> && std::is_copy_assignable_v<T>) ||
+     (std::is_nothrow_move_assignable_v<T> && std::is_move_assignable_v<T>));
+
+template <SPSC_Type T, typename Allocator = std::allocator<T>> class SPSC_Queue
 {
 private:
   std::size_t capacity_;
   std::vector<T, Allocator> buffer_;
   static constexpr std::size_t padding = (cacheLineSize - 1) / sizeof(T) + 1;
-  static constexpr std::size_t MAX_SIZE_T = std::numeric_limits<std::size_t>::max();
-  
+  static constexpr std::size_t MAX_SIZE_T =
+      std::numeric_limits<std::size_t>::max();
+
   alignas(cacheLineSize) std::atomic<std::size_t> readIdx_ {0};
   alignas(cacheLineSize) std::size_t readIdxCache_ {0};
   alignas(cacheLineSize) std::atomic<std::size_t> writeIdx_ {0};
@@ -56,7 +69,10 @@ public:
       : capacity_(capacity), buffer_(allocator)
   {
     capacity_ = (capacity_ < 1) ? 1 : capacity_;
-    if (capacity_ > MAX_SIZE_T - 2 * padding) {
+    ++capacity_;// prevents live lock e.g. reader and writer share 1 slot for
+                // size 1
+    if (capacity_ > MAX_SIZE_T - 2 * padding)
+    {
       capacity_ = MAX_SIZE_T - 2 * padding;
     }
     buffer_.resize(capacity_ + 2 * padding);
@@ -71,11 +87,9 @@ public:
   SPSC_Queue& operator=(SPSC_Queue&& lhs)      = delete;
 
   template <typename... Args>
-  void emplace(Args&&... args) noexcept(
-      std::is_nothrow_constructible<T, Args&&...>::value)
+    requires std::constructible_from<T, Args...>
+  void emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
   {
-    static_assert(std::is_constructible<T, Args&&...>::value,
-                  "T must be constructible with Args&&...");
     auto const writeIdx = writeIdx_.load(std::memory_order_relaxed);
     auto nextWriteIdx   = writeIdx + 1;
     if (nextWriteIdx == capacity_)
@@ -86,16 +100,14 @@ public:
     {
       readIdxCache_ = readIdx_.load(std::memory_order_acquire);
     }
-    buffer_[writeIdx + padding] = std::move(T(std::forward<Args>(args)...));
+    write_value(writeIdx, std::forward<Args...>((args)...));
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
   }
 
   template <typename... Args>
-  bool try_emplace(Args&&... args) noexcept(
-      std::is_nothrow_constructible<T, Args&&...>::value)
+    requires std::constructible_from<T, Args...>
+  bool try_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
   {
-    static_assert(std::is_constructible<T, Args&&...>::value,
-                  "T must be constructible with Args&&...");
     auto const writeIdx = writeIdx_.load(std::memory_order_relaxed);
     auto nextWriteIdx   = writeIdx + 1;
     if (nextWriteIdx == capacity_)
@@ -110,37 +122,28 @@ public:
         return false;
       }
     }
-    buffer_[writeIdx + padding] = std::move(T(std::forward<Args>(args)...));
+    write_value(writeIdx, std::forward<Args&&...>((args)...));
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
     return true;
   }
 
-  void push(const T& val) noexcept(std::is_nothrow_copy_constructible<T>::value)
-  {
-    static_assert(std::is_copy_constructible<T>::value,
-                  "T must be copy constructable");
-    emplace(val);
-  }
+  void push(const T& val) noexcept(SPSC_NoThrow_Type<T>) { emplace(val); }
 
-  template <typename P, typename = typename std::enable_if<
-                            std::is_constructible<T, P&&>::value>::type>
-  void push(P&& val) noexcept(std::is_nothrow_constructible<T, P&&>::value)
+  template <typename P>
+    requires std::constructible_from<T, P&&>
+  void push(P&& val) noexcept(SPSC_NoThrow_Type<T, P&&>)
   {
     emplace(std::forward<P>(val));
   }
 
-  [[nodiscard]] bool try_push(const T& val) noexcept(
-      std::is_nothrow_copy_constructible<T>::value)
+  [[nodiscard]] bool try_push(const T& val) noexcept(SPSC_NoThrow_Type<T>)
   {
-    static_assert(std::is_copy_constructible<T>::value,
-                  "T must be nothrow copy constructible");
     return try_emplace(val);
   }
 
-  template <typename P, typename = typename std::enable_if<
-                            std::is_constructible<T, P&&>::value>::type>
-  [[nodiscard]] bool try_push(P&& val) noexcept(
-      std::is_nothrow_constructible<T, P&&>::value)
+  template <typename P>
+    requires std::constructible_from<T, P&&>
+  [[nodiscard]] bool try_push(P&& val) noexcept(SPSC_NoThrow_Type<T, P&&>)
   {
     return try_emplace(std::forward<P>(val));
   }
@@ -161,8 +164,6 @@ public:
 
   [[nodiscard]] bool try_pop() noexcept
   {
-    static_assert(std::is_nothrow_destructible<T>::value,
-                  "T must be nothrow destructible");
     const auto readIdx = readIdx_.load(std::memory_order_relaxed);
     if (readIdx == writeIdxCache_)
     {
@@ -199,6 +200,36 @@ public:
   }
 
   [[nodiscard]] std::size_t capacity() const noexcept { return capacity_ - 1; }
+
+private:
+  void write_value(const auto writeIdx, T val) noexcept(SPSC_NoThrow_Type<T>)
+    requires std::is_copy_assignable_v<T> && (! std::is_move_assignable_v<T>)
+  {
+    buffer_[writeIdx + padding] = val;
+  }
+
+  void write_value(const auto writeIdx, T val) noexcept(SPSC_NoThrow_Type<T>)
+    requires std::is_move_assignable_v<T>
+  {
+    buffer_[writeIdx + padding] = std::move(val);
+  }
+
+  template <typename... Args>
+    requires std::constructible_from<T, Args...> &&
+             std::is_copy_assignable_v<T> && (! std::is_move_assignable_v<T>)
+  void write_value(const auto writeIdx,
+                   Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
+  {
+    buffer_[writeIdx + padding] = T(std::forward<Args>(args)...);
+  }
+
+  template <typename... Args>
+    requires std::constructible_from<T, Args...> && std::is_move_assignable_v<T>
+  void write_value(const auto writeIdx,
+                   Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
+  {
+    buffer_[writeIdx + padding] = std::move(T(std::forward<Args>(args)...));
+  }
 };
 
 }// namespace dro
