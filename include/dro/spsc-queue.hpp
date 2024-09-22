@@ -2,21 +2,25 @@
 //
 // Inspired from Erik Rigtorp
 // Significant Modifications / Improvements
-// E.G
+// 
 // 1) Removed Raw Pointers
 // 2) Utilized Vector for RAII memory management
 // 3) Modified API to use try_pop instead of pop
 //     a) This prevents two function calls for one task
-//     b) 2x performance boost for Debug by removing assert
+//     b) Removing assert from Debug Mode
+// 4) Used copy assignment instead of placement new 
 
 #ifndef DRO_SPSC_QUEUE
 #define DRO_SPSC_QUEUE
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <new>
 #include <type_traits>
@@ -33,55 +37,14 @@ static constexpr std::size_t cacheLineSize =
 static constexpr std::size_t cacheLineSize = 64;
 #endif
 
-template <typename K> struct alignas(cacheLineSize) Slot
-{
-  K data_;
-
-  template <typename... Args>
-  explicit Slot(Args&&... args) : data_(K(std::forward<Args>(args)...))
-  {
-  }
-
-  void destroy() { data_.~K(); }
-
-  ~Slot() { destroy(); }
-  // These are required for vector static assert, but are never invoked
-  Slot(const Slot& lhs) noexcept(std::is_nothrow_copy_constructible<K>::value)
-      : data_(lhs.data_)
-  {
-  }
-  Slot& operator=(const Slot& lhs) noexcept(
-      std::is_nothrow_copy_assignable<K>::value)
-  {
-    if (*this != lhs)
-    {
-      data_ = lhs.data_;
-    }
-    return *this;
-  };
-  Slot(Slot&& lhs) noexcept(std::is_nothrow_move_constructible<K>::value)
-      : data_(std::move(lhs.data_))
-  {
-  }
-  Slot& operator=(Slot&& lhs) noexcept(
-      std::is_nothrow_move_assignable<K>::value)
-  {
-    if (*this != lhs)
-    {
-      data_ = std::move(lhs.data_);
-    }
-    return *this;
-  };
-  bool operator!=(Slot& lhs) { return data_ != lhs.data_; }
-};
-
-template <typename T, typename Allocator = std::allocator<Slot<T>>>
-class SPSC_Queue
+template <typename T, typename Allocator = std::allocator<T>> class SPSC_Queue
 {
 private:
   std::size_t capacity_;
-  std::vector<Slot<T>, Allocator> buffer_;
-
+  std::vector<T, Allocator> buffer_;
+  static constexpr std::size_t padding = (cacheLineSize - 1) / sizeof(T) + 1;
+  static constexpr std::size_t MAX_SIZE_T = std::numeric_limits<std::size_t>::max();
+  
   alignas(cacheLineSize) std::atomic<std::size_t> readIdx_ {0};
   alignas(cacheLineSize) std::size_t readIdxCache_ {0};
   alignas(cacheLineSize) std::atomic<std::size_t> writeIdx_ {0};
@@ -92,24 +55,14 @@ public:
                       const Allocator& allocator = Allocator())
       : capacity_(capacity), buffer_(allocator)
   {
-    // Needs at least one element
-    if (capacity_ < 1)
-    {
-      capacity_ = 1;
+    capacity_ = (capacity_ < 1) ? 1 : capacity_;
+    if (capacity_ > MAX_SIZE_T - 2 * padding) {
+      capacity_ = MAX_SIZE_T - 2 * padding;
     }
-    ++capacity_;// one extra element
-    // Avoids overflow of size_t
-    if (capacity_ > SIZE_MAX)
-    {
-      capacity_ = SIZE_MAX;
-    }
-    buffer_.resize(capacity_);
+    buffer_.resize(capacity_ + 2 * padding);
   }
 
-  ~SPSC_Queue()
-  {
-    while (try_pop()) {}
-  }
+  ~SPSC_Queue() = default;
 
   // non-copyable and non-movable
   SPSC_Queue(const SPSC_Queue& lhs)            = delete;
@@ -133,7 +86,7 @@ public:
     {
       readIdxCache_ = readIdx_.load(std::memory_order_acquire);
     }
-    buffer_[writeIdx].data_ = std::move(T(std::forward<Args>(args)...));
+    buffer_[writeIdx + padding] = std::move(T(std::forward<Args>(args)...));
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
   }
 
@@ -157,7 +110,7 @@ public:
         return false;
       }
     }
-    buffer_[writeIdx].data_ = std::move(T(std::forward<Args>(args)...));
+    buffer_[writeIdx + padding] = std::move(T(std::forward<Args>(args)...));
     writeIdx_.store(nextWriteIdx, std::memory_order_release);
     return true;
   }
@@ -203,7 +156,7 @@ public:
         return nullptr;
       }
     }
-    return &buffer_[readIdx].data_;
+    return &buffer_[readIdx + padding];
   }
 
   [[nodiscard]] bool try_pop() noexcept
@@ -219,7 +172,6 @@ public:
         return false;
       }
     }
-    buffer_[readIdx].destroy();
     auto nextReadIdx = readIdx + 1;
     if (nextReadIdx == capacity_)
     {
@@ -248,5 +200,7 @@ public:
 
   [[nodiscard]] std::size_t capacity() const noexcept { return capacity_ - 1; }
 };
+
 }// namespace dro
+
 #endif
