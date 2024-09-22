@@ -3,14 +3,17 @@
 
 int main(int argc, char* argv[])
 {
+  int const iter {10};
   dro::SPSC_Queue<int> queue(1);
   auto thrd = std::thread([&] {
-    while (! queue.front()) {}
-    queue.try_pop();
+    for (int i {}; i < iter; ++i)
+    {
+      while (! queue.try_pop()) {}
+    }
   });
-  thrd.join();
 
-  queue.push(1);
+  for (int i {}; i < iter; ++i) { queue.push(i); }
+  thrd.join();
 
   return 0;
 }
