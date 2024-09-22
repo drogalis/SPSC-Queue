@@ -17,7 +17,7 @@ cmake_path(GET CMAKE_CURRENT_SOURCE_DIR PARENT_PATH PARENT_DIR)
 # Add a testing executable
 add_executable(${PROJECT_NAME} spsc-queue-benchmark.cpp)
 
-target_include_directories(${PROJECT_NAME} PRIVATE ${PARENT_DIR}/src)
+target_include_directories(${PROJECT_NAME} PRIVATE ${PARENT_DIR}/include)
 
 include(${PARENT_DIR}/cmake/CompilerWarnings.cmake)
 include(${PARENT_DIR}/cmake/Sanitizers.cmake)

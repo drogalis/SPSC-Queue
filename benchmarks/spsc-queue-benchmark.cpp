@@ -1,7 +1,4 @@
-// Andrew Drogalis
-
-#include "../src/spsc-queue.hpp"
-#include "SPSCQueue.h"
+#include "dro/spsc-queue.hpp"
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
@@ -9,7 +6,6 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdexcept>
-#include <string>
 #include <thread>
 
 void pinThread(int cpu)
@@ -30,8 +26,6 @@ void pinThread(int cpu)
 
 int main(int argc, char** argv)
 {
-  using namespace rigtorp;
-
   int cpu1 {-1};
   int cpu2 {-1};
 
@@ -44,8 +38,10 @@ int main(int argc, char** argv)
   const std::size_t queueSize {10'000'000};
   const std::size_t iters {10'000'000};
 
+  std::cout << "Dro SPSC_Queue: \n";
+
   {
-    SPSC_Queue<int> q(queueSize);
+    dro::SPSC_Queue<int> q(queueSize);
     auto thrd = std::thread([&]() {
       pinThread(cpu1);
       for (int i {}; i < iters; ++i)
@@ -75,7 +71,7 @@ int main(int argc, char** argv)
   }
 
   {
-    SPSC_Queue<int> q1(queueSize), q2(queueSize);
+    dro::SPSC_Queue<int> q1(queueSize), q2(queueSize);
     auto thrd = std::thread([&]() {
       pinThread(cpu1);
       for (int i {}; i < iters; ++i)
