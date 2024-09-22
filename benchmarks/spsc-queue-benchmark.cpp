@@ -35,31 +35,38 @@ int main(int argc, char** argv)
     cpu2 = std::stoi(argv[2]);
   }
 
+  // Alignas powers of 2 for convenient testing of various sizes
+  struct alignas(4) TestSize
+  {
+    int x_;
+    TestSize() = default;
+    TestSize(int x) : x_(x) {}
+  };
+
   const std::size_t queueSize {10'000'000};
   const std::size_t iters {10'000'000};
 
   std::cout << "Dro SPSC_Queue: \n";
 
   {
-    dro::SPSC_Queue<int> q(queueSize);
+    dro::SPSC_Queue<TestSize> queue(queueSize);
     auto thrd = std::thread([&]() {
       pinThread(cpu1);
       for (int i {}; i < iters; ++i)
       {
-        while (! q.front()) {}
-        if (*q.front() != i)
+        while (! queue.front()) {}
+        if ((*queue.front()).x_ != i)
         {
-          // throw std::runtime_error("Value not equal");
+          throw std::runtime_error("Value not equal");
         }
-        
-        q.pop();
+        queue.try_pop();
       }
     });
 
     pinThread(cpu2);
 
     auto start = std::chrono::steady_clock::now();
-    for (int i {}; i < iters; ++i) { q.emplace(); }
+    for (int i {}; i < iters; ++i) { queue.emplace(TestSize(i)); }
     thrd.join();
     auto stop = std::chrono::steady_clock::now();
 
@@ -71,14 +78,14 @@ int main(int argc, char** argv)
   }
 
   {
-    dro::SPSC_Queue<int> q1(queueSize), q2(queueSize);
+    dro::SPSC_Queue<TestSize> q1(queueSize), q2(queueSize);
     auto thrd = std::thread([&]() {
       pinThread(cpu1);
       for (int i {}; i < iters; ++i)
       {
         while (! q1.front()) {}
         q2.emplace(*q1.front());
-        q1.pop();
+        q1.try_pop();
       }
     });
 
@@ -87,9 +94,9 @@ int main(int argc, char** argv)
     auto start = std::chrono::steady_clock::now();
     for (int i {}; i < iters; ++i)
     {
-      q1.emplace(i);
+      q1.emplace(TestSize(i));
       while (! q2.front()) {}
-       q2.pop();
+      q2.try_pop();
     }
     auto stop = std::chrono::steady_clock::now();
     thrd.join();
