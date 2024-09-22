@@ -54,6 +54,7 @@ template <SPSC_Type T, typename Allocator = std::allocator<T>> class SPSC_Queue
 private:
   std::size_t capacity_;
   std::vector<T, Allocator> buffer_;
+
   static constexpr std::size_t padding = (cacheLineSize - 1) / sizeof(T) + 1;
   static constexpr std::size_t MAX_SIZE_T =
       std::numeric_limits<std::size_t>::max();
@@ -67,14 +68,19 @@ public:
   explicit SPSC_Queue(const std::size_t capacity,
                       const Allocator& allocator = Allocator())
       : capacity_(capacity), buffer_(allocator)
-  {
+  { 
+    // Capacity cannot be negative
+    // if (capacity_ < 1) { throw std::logic_error("Capacity must be positive"); }
     capacity_ = (capacity_ < 1) ? 1 : capacity_;
+    // 2 * padding is for preventing cache contention over lap at beginning and
+    // end of queue
+    // - 1 is for the ++capacity_ argument (rare overflow edge case)
+    if (capacity_ > MAX_SIZE_T - 2 * padding - 1)
+    {
+      capacity_ = MAX_SIZE_T - 2 * padding - 1;
+    }
     ++capacity_;// prevents live lock e.g. reader and writer share 1 slot for
                 // size 1
-    if (capacity_ > MAX_SIZE_T - 2 * padding)
-    {
-      capacity_ = MAX_SIZE_T - 2 * padding;
-    }
     buffer_.resize(capacity_ + 2 * padding);
   }
 
