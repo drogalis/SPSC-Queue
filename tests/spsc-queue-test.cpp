@@ -1,68 +1,73 @@
-#include <dro/SPSCqueueueue.h>
 #include <cassert>
-#include <thread>
+#include <dro/spsc-queue.hpp>
+#include <memory>
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[])
+{
 
-  // Functionality test
+  // Functional Test
   {
-    dro::SPSC_queue<int> queue(10);
+    dro::SPSC_Queue<int> queue {10};
     assert(queue.front() == nullptr);
     assert(queue.size() == 0);
     assert(queue.empty() == true);
     assert(queue.capacity() == 10);
-    for (int i = 0; i < 10; i++) {
-      queue.emplace(i);
-    }
+    for (int i = 0; i < 10; i++) { queue.emplace(i); }
     assert(queue.front() != nullptr);
     assert(queue.size() == 10);
     assert(queue.empty() == false);
-    assert(queue.try_emplace() == false);
+    assert(queue.try_emplace(1) == false);
     queue.try_pop();
     assert(queue.size() == 9);
-    queue.pop();
-    assert(queue.try_emplace() == true);
+    queue.try_pop();
+    assert(queue.try_emplace(1) == true);
   }
 
+  // Copyable Only
   {
-    struct Test {
-      Test() {}
-      Test(const Test &) {}
-      Test(Test &&) = delete;
+    struct Test
+    {
+      Test()  = default;
+      ~Test() = default;
+      Test(const Test&) = default;
+      Test& operator=(const Test&) = default;
+      Test(Test&&) = delete;
+      Test& operator=(Test&&) = delete;
     };
-    dro::SPSC_queue<Test> queue(16);
+    dro::SPSC_Queue<Test> queue {16};
     // lvalue
     Test v;
     queue.emplace(v);
     (void)queue.try_emplace(v);
     queue.push(v);
     (void)queue.try_push(v);
-    static_assert(noexcept(queue.emplace(v)) == false, "");
-    static_assert(noexcept(queue.try_emplace(v)) == false, "");
-    static_assert(noexcept(queue.push(v)) == false, "");
-    static_assert(noexcept(queue.try_push(v)) == false, "");
+    static_assert(noexcept(queue.emplace(v)));
+    static_assert(noexcept(queue.try_emplace(v)));
+    static_assert(noexcept(queue.push(v)));
+    static_assert(noexcept(queue.try_push(v)));
     // xvalue
     queue.push(Test());
     (void)queue.try_push(Test());
-    static_assert(noexcept(queue.push(Test())) == false, "");
-    static_assert(noexcept(queue.try_push(Test())) == false, "");
+    static_assert(noexcept(queue.push(Test())));
+    static_assert(noexcept(queue.try_push(Test())));
+  }
+
+  // Moveable Only
+  {
+    dro::SPSC_Queue<std::unique_ptr<int>> queue {16};
+    queue.emplace(std::make_unique<int>(1));
+    queue.try_emplace(std::make_unique<int>(1));
+    queue.push(std::make_unique<int>(1));
+    queue.try_push(std::make_unique<int>(1));
+    auto v = std::make_unique<int>(1);
+    static_assert(noexcept(queue.emplace(std::move(v))));
+    static_assert(noexcept(queue.try_emplace(std::move(v))));
+    static_assert(noexcept(queue.push(std::move(v))));
+    static_assert(noexcept(queue.try_push(std::move(v))));
   }
 
   {
-    dro::SPSC_queue<std::unique_ptr<int>> q(16);
-    queue.emplace(std::unique_ptr<int>(new int(1)));
-    (void)queue.try_emplace(std::unique_ptr<int>(new int(1)));
-    queue.push(std::unique_ptr<int>(new int(1)));
-    (void)queue.try_push(std::unique_ptr<int>(new int(1)));
-    auto v = std::uniqueueue_ptr<int>(new int(1));
-    static_assert(noexcept(queue.emplace(std::move(v))) == true, "");
-    static_assert(noexcept(queue.try_emplace(std::move(v))) == true, "");
-    static_assert(noexcept(queue.push(std::move(v))) == true, "");
-    static_assert(noexcept(queue.try_push(std::move(v))) == true, "");
-  }
-
-  {
-    dro::SPSC_queue<int> q(0);
+    dro::SPSC_Queue<int> queue(0);
     assert(queue.capacity() == 1);
   }
 
