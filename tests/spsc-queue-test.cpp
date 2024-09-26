@@ -1,6 +1,8 @@
 #include <cassert>
 #include <dro/spsc-queue.hpp>
 #include <memory>
+#include <stdexcept>
+#include <iostream>
 
 int main(int argc, char* argv[])
 {
@@ -27,20 +29,20 @@ int main(int argc, char* argv[])
   {
     struct Test
     {
-      Test()  = default;
-      ~Test() = default;
-      Test(const Test&) = default;
+      Test()                       = default;
+      ~Test()                      = default;
+      Test(const Test&)            = default;
       Test& operator=(const Test&) = default;
-      Test(Test&&) = delete;
-      Test& operator=(Test&&) = delete;
+      Test(Test&&)                 = delete;
+      Test& operator=(Test&&)      = delete;
     };
     dro::SPSC_Queue<Test> queue {16};
     // lvalue
     Test v;
     queue.emplace(v);
-    (void)queue.try_emplace(v);
+    queue.try_emplace(v);
     queue.push(v);
-    (void)queue.try_push(v);
+    queue.try_push(v);
     static_assert(noexcept(queue.emplace(v)));
     static_assert(noexcept(queue.try_emplace(v)));
     static_assert(noexcept(queue.push(v)));
@@ -67,9 +69,16 @@ int main(int argc, char* argv[])
   }
 
   {
-    dro::SPSC_Queue<int> queue(0);
-    assert(queue.capacity() == 1);
+    try
+    {
+      dro::SPSC_Queue<int> queue(0);
+      assert(false); // Should never be called
+    }
+    catch (std::logic_error& e)
+    {
+    }
   }
 
+  std::cout << "Tests Completed!\n";
   return 0;
 }
