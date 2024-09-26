@@ -1,31 +1,43 @@
-#include <cassert>
+// Andrew Drogalis Copyright (c) 2024, GNU 3.0 Licence
+//
+// Inspired from Erik Rigtorp
+// Significant Modifications / Improvements
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+
 #include <dro/spsc-queue.hpp>
+
+#include <algorithm>
+#include <cassert>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
-#include <iostream>
 
 int main(int argc, char* argv[])
 {
 
-  // Functional Test
+  // Functional Tests
   {
-    dro::SPSC_Queue<int> queue {10};
-    assert(queue.front() == nullptr);
-    assert(queue.size() == 0);
-    assert(queue.empty() == true);
+    dro::SPSCQueue<int> queue {10};
+    int val {};
+    assert(! queue.try_pop(val));
+    assert(! queue.size());
+    assert(queue.empty());
     assert(queue.capacity() == 10);
     for (int i = 0; i < 10; i++) { queue.emplace(i); }
-    assert(queue.front() != nullptr);
-    assert(queue.size() == 10);
-    assert(queue.empty() == false);
-    assert(queue.try_emplace(1) == false);
-    queue.try_pop();
+    assert(queue.try_pop(val));
     assert(queue.size() == 9);
-    queue.try_pop();
-    assert(queue.try_emplace(1) == true);
+    assert(! queue.empty());
+    assert(queue.try_emplace(1));
+    assert(! queue.try_emplace(1));
+    bool discard = queue.try_pop(val);
+    assert(queue.size() == 9);
   }
 
-  // Copyable Only
+  // Copyable Only Object
   {
     struct Test
     {
@@ -36,46 +48,59 @@ int main(int argc, char* argv[])
       Test(Test&&)                 = delete;
       Test& operator=(Test&&)      = delete;
     };
-    dro::SPSC_Queue<Test> queue {16};
-    // lvalue
+    dro::SPSCQueue<Test> queue {16};
     Test v;
     queue.emplace(v);
     queue.try_emplace(v);
     queue.push(v);
-    queue.try_push(v);
+    bool discard = queue.try_push(v);
+    assert(queue.size() == 4);
     static_assert(noexcept(queue.emplace(v)));
     static_assert(noexcept(queue.try_emplace(v)));
     static_assert(noexcept(queue.push(v)));
     static_assert(noexcept(queue.try_push(v)));
-    // xvalue
+    // rvalue
     queue.push(Test());
-    (void)queue.try_push(Test());
+    discard = queue.try_push(Test());
     static_assert(noexcept(queue.push(Test())));
     static_assert(noexcept(queue.try_push(Test())));
+    assert(queue.size() == 6);
+    // Pop
+    Test val;
+    discard = queue.try_pop(val);
+    assert(queue.size() == 5);
   }
 
-  // Moveable Only
+  // Moveable Only Object
   {
-    dro::SPSC_Queue<std::unique_ptr<int>> queue {16};
+    dro::SPSCQueue<std::unique_ptr<int>> queue {16};
     queue.emplace(std::make_unique<int>(1));
     queue.try_emplace(std::make_unique<int>(1));
     queue.push(std::make_unique<int>(1));
-    queue.try_push(std::make_unique<int>(1));
-    auto v = std::make_unique<int>(1);
-    static_assert(noexcept(queue.emplace(std::move(v))));
-    static_assert(noexcept(queue.try_emplace(std::move(v))));
-    static_assert(noexcept(queue.push(std::move(v))));
-    static_assert(noexcept(queue.try_push(std::move(v))));
+    bool discard = queue.try_push(std::make_unique<int>(1));
+    assert(queue.size() == 4);
+    auto moveable = std::make_unique<int>(1);
+    static_assert(noexcept(queue.emplace(std::move(moveable))));
+    static_assert(noexcept(queue.try_emplace(std::move(moveable))));
+    static_assert(noexcept(queue.push(std::move(moveable))));
+    static_assert(noexcept(queue.try_push(std::move(moveable))));
+    // Pop
+    std::unique_ptr<int> val;
+    discard = queue.try_pop(val);
+    assert(queue.size() == 3);
+    assert(*val.get() == 1);
   }
 
+  // Constructor Exception
   {
     try
     {
-      dro::SPSC_Queue<int> queue(0);
-      assert(false); // Should never be called
+      dro::SPSCQueue<int> queue(0);
+      assert(false);// Should never be called
     }
     catch (std::logic_error& e)
     {
+      assert(true);// Should always be called
     }
   }
 
