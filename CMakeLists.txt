@@ -10,10 +10,14 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 cmake_path(GET CMAKE_CURRENT_SOURCE_DIR PARENT_PATH PARENT_DIR)
 
-target_include_directories(${PROJECT_NAME} PRIVATE ${PARENT_DIR}/include)
+add_library(${PROJECT_NAME} INTERFACE)
 
-include(${PARENT_DIR}/cmake/CompilerWarnings.cmake)
-include(${PARENT_DIR}/cmake/Sanitizers.cmake)
+target_include_directories(${PROJECT_NAME} INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>)
+
+include(cmake/CompilerWarnings.cmake)
+include(cmake/Sanitizers.cmake)
 
 myproject_set_project_warnings(${PROJECT_NAME} TRUE "X" "" "" "X")
 
@@ -22,7 +26,32 @@ myproject_enable_sanitizers(${PROJECT_NAME} TRUE TRUE TRUE FALSE TRUE)
 
 # ------------------------------
 # Install library
-install(
-  TARGETS ${PROJECT_NAME}
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+export(
+    TARGETS ${PROJECT_NAME}
+    NAMESPACE ${PROJECT_NAME}::
+    FILE "${PROJECT_NAME}Config.cmake"
+)
+
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    install(
+        DIRECTORY "include/"
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+
+    install(
+        TARGETS ${PROJECT_NAME}
+        EXPORT "${PROJECT_NAME}Config"
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+
+    install(
+        EXPORT "${PROJECT_NAME}Config"
+        NAMESPACE ${PROJECT_NAME}::
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
+    )
+
+    install(
+        FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
+    )
+endif()
