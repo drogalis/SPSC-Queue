@@ -3,29 +3,23 @@
 // Inspired from Erik Rigtorp
 // Significant Modifications / Improvements
 //
-// 1) Removed Raw Pointers
-// 2) Utilized Vector for RAII memory management
-// 3) Modified API to use try_pop instead of pop
-// 4) Used copy assignment instead of placement new
-// 5) Added C++20 concepts
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
 
 #ifndef DRO_SPSC_QUEUE
 #define DRO_SPSC_QUEUE
 
-#include <algorithm>
-#include <atomic>
-#include <cassert>
-#include <climits>
+#include <atomic>// for atomic, memory_order
 #include <concepts>
-#include <cstddef>
-#include <cstdint>
-#include <iterator>
-#include <limits>
-#include <memory>
-#include <new>
+#include <cstddef>  // for size_t
+#include <limits>   // for numeric_limits
+#include <new>      // for std::hardware_destructive_interference_size
+#include <stdexcept>// for std::logic_error
 #include <type_traits>
-#include <utility>
-#include <vector>
+#include <utility>// for forward
+#include <vector> // for vector, allocator
 
 namespace dro
 {
@@ -55,37 +49,36 @@ private:
   std::size_t capacity_;
   std::vector<T, Allocator> buffer_;
 
-  static constexpr std::size_t padding = (cacheLineSize - 1) / sizeof(T) + 1;
+  static constexpr std::size_t padding = ((cacheLineSize - 1) / sizeof(T)) + 1;
   static constexpr std::size_t MAX_SIZE_T =
       std::numeric_limits<std::size_t>::max();
 
-  alignas(cacheLineSize) std::atomic<std::size_t> readIdx_ {0};
-  alignas(cacheLineSize) std::size_t readIdxCache_ {0};
-  alignas(cacheLineSize) std::atomic<std::size_t> writeIdx_ {0};
-  alignas(cacheLineSize) std::size_t writeIdxCache_ {0};
+  alignas(cacheLineSize) std::atomic<std::size_t> readIndex_ {0};
+  alignas(cacheLineSize) std::size_t readIndexCache_ {0};
+  alignas(cacheLineSize) std::atomic<std::size_t> writeIndex_ {0};
+  alignas(cacheLineSize) std::size_t writeIndexCache_ {0};
 
 public:
   explicit SPSC_Queue(const std::size_t capacity,
                       const Allocator& allocator = Allocator())
       : capacity_(capacity), buffer_(allocator)
-  { 
+  {
     // Capacity cannot be negative
-    // if (capacity_ < 1) { throw std::logic_error("Capacity must be positive"); }
-    capacity_ = (capacity_ < 1) ? 1 : capacity_;
-    // 2 * padding is for preventing cache contention over lap at beginning and
-    // end of queue
-    // - 1 is for the ++capacity_ argument (rare overflow edge case)
-    if (capacity_ > MAX_SIZE_T - 2 * padding - 1)
+    if (capacity_ < 1)
     {
-      capacity_ = MAX_SIZE_T - 2 * padding - 1;
+      throw std::logic_error("Capacity must be positive size type");
     }
+    // Padding is for preventing cache contention between reader and writer
+    // - 1 is for the ++capacity_ argument (rare overflow edge case)
+    capacity_ = (capacity_ < MAX_SIZE_T - padding - 1)
+                    ? capacity_
+                    : MAX_SIZE_T - padding - 1;
     ++capacity_;// prevents live lock e.g. reader and writer share 1 slot for
                 // size 1
-    buffer_.resize(capacity_ + 2 * padding);
+    buffer_.resize(capacity_ + padding);
   }
 
   ~SPSC_Queue() = default;
-
   // non-copyable and non-movable
   SPSC_Queue(const SPSC_Queue& lhs)            = delete;
   SPSC_Queue& operator=(const SPSC_Queue& lhs) = delete;
@@ -96,40 +89,32 @@ public:
     requires std::constructible_from<T, Args...>
   void emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
   {
-    auto const writeIdx = writeIdx_.load(std::memory_order_relaxed);
-    auto nextWriteIdx   = writeIdx + 1;
-    if (nextWriteIdx == capacity_)
+    auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
+    auto nextWriteIndex   = (writeIndex == capacity_ - 1) ? 0 : writeIndex + 1;
+    while (nextWriteIndex == readIndexCache_)
     {
-      nextWriteIdx = 0;
+      readIndexCache_ = readIndex_.load(std::memory_order_acquire);
     }
-    while (nextWriteIdx == readIdxCache_)
-    {
-      readIdxCache_ = readIdx_.load(std::memory_order_acquire);
-    }
-    write_value(writeIdx, std::forward<Args...>((args)...));
-    writeIdx_.store(nextWriteIdx, std::memory_order_release);
+    write_value(writeIndex, std::forward<Args...>((args)...));
+    writeIndex_.store(nextWriteIndex, std::memory_order_release);
   }
 
   template <typename... Args>
     requires std::constructible_from<T, Args...>
   bool try_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
   {
-    auto const writeIdx = writeIdx_.load(std::memory_order_relaxed);
-    auto nextWriteIdx   = writeIdx + 1;
-    if (nextWriteIdx == capacity_)
+    auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
+    auto nextWriteIndex   = (writeIndex == capacity_ - 1) ? 0 : writeIndex + 1;
+    if (nextWriteIndex == readIndexCache_)
     {
-      nextWriteIdx = 0;
-    }
-    if (nextWriteIdx == readIdxCache_)
-    {
-      readIdxCache_ = readIdx_.load(std::memory_order_acquire);
-      if (nextWriteIdx == readIdxCache_)
+      readIndexCache_ = readIndex_.load(std::memory_order_acquire);
+      if (nextWriteIndex == readIndexCache_)
       {
         return false;
       }
     }
-    write_value(writeIdx, std::forward<Args&&...>((args)...));
-    writeIdx_.store(nextWriteIdx, std::memory_order_release);
+    write_value(writeIndex, std::forward<Args&&...>((args)...));
+    writeIndex_.store(nextWriteIndex, std::memory_order_release);
     return true;
   }
 
@@ -156,85 +141,82 @@ public:
 
   [[nodiscard]] T* front() noexcept
   {
-    const auto readIdx = readIdx_.load(std::memory_order_relaxed);
-    if (readIdx == writeIdxCache_)
+    const auto readIndex = readIndex_.load(std::memory_order_relaxed);
+    if (readIndex == writeIndexCache_)
     {
-      writeIdxCache_ = writeIdx_.load(std::memory_order_acquire);
-      if (readIdx == writeIdxCache_)
+      writeIndexCache_ = writeIndex_.load(std::memory_order_acquire);
+      if (readIndex == writeIndexCache_)
       {
         return nullptr;
       }
     }
-    return &buffer_[readIdx + padding];
+    return &buffer_[readIndex + padding];
   }
 
   [[nodiscard]] bool try_pop() noexcept
   {
-    const auto readIdx = readIdx_.load(std::memory_order_relaxed);
-    if (readIdx == writeIdxCache_)
+    const auto readIndex = readIndex_.load(std::memory_order_relaxed);
+    if (readIndex == writeIndexCache_)
     {
-      writeIdxCache_ = writeIdx_.load(std::memory_order_acquire);
-      if (readIdx == writeIdxCache_)
+      writeIndexCache_ = writeIndex_.load(std::memory_order_acquire);
+      if (readIndex == writeIndexCache_)
       {
         return false;
       }
     }
-    auto nextReadIdx = readIdx + 1;
-    if (nextReadIdx == capacity_)
-    {
-      nextReadIdx = 0;
-    }
-    readIdx_.store(nextReadIdx, std::memory_order_release);
+    auto nextReadIndex = (readIndex == capacity_ - 1) ? 0 : readIndex + 1;
+    readIndex_.store(nextReadIndex, std::memory_order_release);
     return true;
   }
 
   [[nodiscard]] std::size_t size() const noexcept
   {
-    std::ptrdiff_t diff = writeIdx_.load(std::memory_order_acquire) -
-                          readIdx_.load(std::memory_order_acquire);
-    if (diff < 0)
+    auto writeIndex = writeIndex_.load(std::memory_order_acquire);
+    auto readIndex  = readIndex_.load(std::memory_order_acquire);
+    // This method prevents conversion to std::ptrdiff_t (a signed type)
+    if (writeIndex >= readIndex)
     {
-      diff += capacity_;
+      return writeIndex - readIndex;
     }
-    return static_cast<std::size_t>(diff);
+    return (MAX_SIZE_T - readIndex) + writeIndex;
   }
 
   [[nodiscard]] bool empty() const noexcept
   {
-    return writeIdx_.load(std::memory_order_acquire) ==
-           readIdx_.load(std::memory_order_acquire);
+    return writeIndex_.load(std::memory_order_acquire) ==
+           readIndex_.load(std::memory_order_acquire);
   }
 
   [[nodiscard]] std::size_t capacity() const noexcept { return capacity_ - 1; }
 
 private:
-  void write_value(const auto writeIdx, T val) noexcept(SPSC_NoThrow_Type<T>)
+  void write_value(const auto writeIndex, T val) noexcept(SPSC_NoThrow_Type<T>)
     requires std::is_copy_assignable_v<T> && (! std::is_move_assignable_v<T>)
   {
-    buffer_[writeIdx + padding] = val;
+    buffer_[writeIndex + padding] = val;
   }
 
-  void write_value(const auto writeIdx, T val) noexcept(SPSC_NoThrow_Type<T>)
+  void write_value(const auto writeIndex, T val) noexcept(SPSC_NoThrow_Type<T>)
     requires std::is_move_assignable_v<T>
   {
-    buffer_[writeIdx + padding] = std::move(val);
+    buffer_[writeIndex + padding] = std::move(val);
   }
 
   template <typename... Args>
     requires std::constructible_from<T, Args...> &&
              std::is_copy_assignable_v<T> && (! std::is_move_assignable_v<T>)
-  void write_value(const auto writeIdx,
+  void write_value(const auto writeIndex,
                    Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
   {
-    buffer_[writeIdx + padding] = T(std::forward<Args>(args)...);
+    buffer_[writeIndex + padding] = T(std::forward<Args>(args)...);
   }
 
   template <typename... Args>
     requires std::constructible_from<T, Args...> && std::is_move_assignable_v<T>
-  void write_value(const auto writeIdx,
+  void write_value(const auto writeIndex,
                    Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
   {
-    buffer_[writeIdx + padding] = std::move(T(std::forward<Args>(args)...));
+    buffer_[writeIndex + padding] = std::move(T(std::forward<Args>(args)...));
   }
 };
 
