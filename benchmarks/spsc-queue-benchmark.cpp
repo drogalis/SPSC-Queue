@@ -1,14 +1,14 @@
+// Andrew Drogalis Copyright (c) 2024, GNU 3.0 Licence
+//
+// Inspired from Erik Rigtorp
+// Significant Modifications / Improvements
+//
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+
 #include "dro/spsc-queue.hpp"
-#include <chrono>
-#include <cstddef>
-#include <cstdio>
-#include <iostream>
-#include <numeric>
-#include <pthread.h>
-#include <sched.h>
-#include <stdexcept>
-#include <thread>
-#include <vector>
 
 #if __has_include(<rigtorp/SPSCQueue.h> )
 #include <rigtorp/SPSCQueue.h>
@@ -26,6 +26,18 @@
 #include <readerwriterqueue/readerwriterqueue.h>
 #endif
 
+#include <chrono>
+#include <cstddef>
+#include <cstdio>
+#include <iostream>
+#include <numeric>
+#include <stdexcept>
+#include <thread>
+#include <vector>
+
+#include <pthread.h>
+#include <sched.h>
+
 void pinThread(int cpu)
 {
   if (cpu < 0)
@@ -42,7 +54,7 @@ void pinThread(int cpu)
   }
 }
 
-int main(int argc, char** argv)
+int main(int argc, char* argv[])
 {
   int cpu1 {-1};
   int cpu2 {-1};
@@ -61,7 +73,7 @@ int main(int argc, char** argv)
     TestSize(int x) : x_(x) {}
   };
 
-  const std::size_t trialSize {11};
+  const std::size_t trialSize {3};
   static_assert(trialSize % 2, "Trial size must be odd");
 
   const std::size_t queueSize {10'000'000};
@@ -74,17 +86,17 @@ int main(int argc, char** argv)
   for (int i {}; i < trialSize; ++i)
   {
     {
-      dro::SPSC_Queue<TestSize> queue(queueSize);
+      dro::SPSCQueue<TestSize> queue(queueSize);
       auto thrd = std::thread([&]() {
         pinThread(cpu1);
         for (int i {}; i < iters; ++i)
         {
-          while (! queue.front()) {}
-          if ((*queue.front()).x_ != i)
+          TestSize val;
+          while (! queue.try_pop(val)) {}
+          if (val.x_ != i)
           {
             throw std::runtime_error("Value not equal");
           }
-          queue.try_pop();
         }
       });
 
@@ -102,14 +114,14 @@ int main(int argc, char** argv)
     }
 
     {
-      dro::SPSC_Queue<TestSize> q1(queueSize), q2(queueSize);
+      dro::SPSCQueue<TestSize> q1(queueSize), q2(queueSize);
       auto thrd = std::thread([&]() {
         pinThread(cpu1);
         for (int i {}; i < iters; ++i)
         {
-          while (! q1.front()) {}
-          q2.emplace(*q1.front());
-          q1.try_pop();
+          TestSize val;
+          while (! q1.try_pop(val)) {}
+          q2.emplace(val);
         }
       });
 
@@ -119,8 +131,8 @@ int main(int argc, char** argv)
       for (int i {}; i < iters; ++i)
       {
         q1.emplace(TestSize(i));
-        while (! q2.front()) {}
-        q2.try_pop();
+        TestSize val;
+        while (! q2.try_pop(val)) {}
       }
       auto stop = std::chrono::steady_clock::now();
       thrd.join();
