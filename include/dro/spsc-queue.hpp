@@ -11,15 +11,15 @@
 #ifndef DRO_SPSC_QUEUE
 #define DRO_SPSC_QUEUE
 
-#include <atomic>// for atomic, memory_order
-#include <concepts>
-#include <cstddef>  // for size_t
-#include <limits>   // for numeric_limits
-#include <new>      // for std::hardware_destructive_interference_size
-#include <stdexcept>// for std::logic_error
-#include <type_traits>
-#include <utility>// for forward
-#include <vector> // for vector, allocator
+#include <atomic>     // for atomic, memory_order
+#include <concepts>   // for concept, requires
+#include <cstddef>    // for size_t
+#include <limits>     // for numeric_limits
+#include <new>        // for std::hardware_destructive_interference_size
+#include <stdexcept>  // for std::logic_error
+#include <type_traits>// for std::is_default_constructible
+#include <utility>    // for forward
+#include <vector>     // for vector, allocator
 
 namespace dro
 {
@@ -68,14 +68,14 @@ public:
     {
       throw std::logic_error("SPSCQueue capacity must be positive size type");
     }
-    // Padding is for preventing cache contention between reader and writer
+    // Padding is for preventing cache contention between adjacent memory
     // - 1 is for the ++capacity_ argument (rare overflow edge case)
-    capacity_ = (capacity_ < MAX_SIZE_T - padding - 1)
+    capacity_ = (capacity_ < MAX_SIZE_T - 2 * padding - 1)
                     ? capacity_
-                    : MAX_SIZE_T - padding - 1;
+                    : MAX_SIZE_T - 2 * padding - 1;
     ++capacity_;// prevents live lock e.g. reader and writer share 1 slot for
                 // size 1
-    buffer_.resize(capacity_ + padding);
+    buffer_.resize(capacity_ + 2 * padding);
   }
 
   ~SPSCQueue() = default;
