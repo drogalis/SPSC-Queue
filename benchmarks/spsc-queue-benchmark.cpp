@@ -73,7 +73,7 @@ int main(int argc, char* argv[])
     TestSize(int x) : x_(x) {}
   };
 
-  const std::size_t trialSize {3};
+  const std::size_t trialSize {5};
   static_assert(trialSize % 2, "Trial size must be odd");
 
   const std::size_t queueSize {10'000'000};
@@ -170,7 +170,7 @@ int main(int argc, char* argv[])
         for (int i = 0; i < iters; ++i)
         {
           while (! q.front());
-          if ((*q.front()).x_ != i)
+          if (q.front()->x_ != i)
           {
             throw std::runtime_error("");
           }
@@ -197,7 +197,7 @@ int main(int argc, char* argv[])
         for (int i = 0; i < iters; ++i)
         {
           while (! q1.front());
-          q2.emplace(*q1.front());
+          q2.emplace(*(q1.front()));
           q1.pop();
         }
       });
@@ -399,13 +399,13 @@ int main(int argc, char* argv[])
         pinThread(cpu1);
         for (int i = 0; i < iters; ++i)
         {
+          TestSize val;
           while (! q.peek());
-          if ((*q.peek()).x_ != i)
+          q.try_dequeue(val);
+          if (val.x_ != i)
           {
             throw std::runtime_error("");
           }
-          TestSize val {};
-          q.try_dequeue(val);
         }
       });
 
@@ -427,10 +427,10 @@ int main(int argc, char* argv[])
         pinThread(cpu1);
         for (int i = 0; i < iters; ++i)
         {
+          TestSize val;
           while (! q1.peek());
-          q2.try_enqueue(*q1.peek());
-          TestSize val {};
           q1.try_dequeue(val);
+          q2.try_enqueue(val);
         }
       });
 
@@ -440,8 +440,8 @@ int main(int argc, char* argv[])
       for (int i = 0; i < iters; ++i)
       {
         q1.try_enqueue(TestSize(i));
+        TestSize val;
         while (! q2.peek());
-        TestSize val {};
         q2.try_dequeue(val);
       }
       auto stop = std::chrono::steady_clock::now();

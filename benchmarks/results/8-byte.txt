@@ -1,6 +1,6 @@
 Dro SPSC_Queue: 
-Mean: 373357 ops/ms 
-Median: 370270 ops/ms 
+Mean: 532085 ops/ms 
+Median: 529175 ops/ms 
 Mean: 153 ns RTT 
 Median: 153 ns RTT 
 Rigtorp SPSCQueue:
@@ -19,8 +19,10 @@ Median: 45283 ops/ms
 Mean: 176 ns RTT 
 Median: 176 ns RTT 
 moodycamel::ReaderWriterQueue
-Mean: 314745 ops/ms 
-Median: 313933 ops/ms 
-Mean: 148 ns RTT 
-Median: 149 ns RTT 
+Mean: 380759 ops/ms 
+Median: 379217 ops/ms 
+Mean: 150 ns RTT 
+Median: 150 ns RTT 
+
+
 
