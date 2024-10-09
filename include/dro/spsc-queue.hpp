@@ -101,6 +101,16 @@ public:
 
   template <typename... Args>
     requires std::constructible_from<T, Args...>
+  void force_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
+  {
+    auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
+    auto nextWriteIndex   = (writeIndex == capacity_ - 1) ? 0 : writeIndex + 1;
+    write_value(writeIndex, std::forward<Args...>((args)...));
+    writeIndex_.store(nextWriteIndex, std::memory_order_release);
+  }
+
+  template <typename... Args>
+    requires std::constructible_from<T, Args...>
   bool try_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>)
   {
     auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
@@ -125,6 +135,15 @@ public:
   void push(P&& val) noexcept(SPSC_NoThrow_Type<T, P&&>)
   {
     emplace(std::forward<P>(val));
+  }
+
+  void force_push(const T& val) noexcept(SPSC_NoThrow_Type<T>) { force_emplace(val); }
+
+  template <typename P>
+    requires std::constructible_from<T, P&&>
+  void force_push(P&& val) noexcept(SPSC_NoThrow_Type<T, P&&>)
+  {
+    force_emplace(std::forward<P>(val));
   }
 
   [[nodiscard]] bool try_push(const T& val) noexcept(SPSC_NoThrow_Type<T>)
