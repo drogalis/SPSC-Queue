@@ -1,14 +1,30 @@
-// Andrew Drogalis Copyright (c) 2024, GNU 3.0 Licence
+// Copyright (c) 2024 Andrew Drogalis
 //
-// Inspired from Erik Rigtorp
-// Significant Modifications / Improvements
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the “Software”), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// This library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
 
-#include "dro/spsc-queue.hpp"
+#include <algorithm> // for sort
+#include <chrono>    // for duration, duration_cast, operator-, steady_...
+#include <cstdio>    // for size_t, perror
+#include <iostream>  // for operator<<, basic_ostream, char_traits, cout
+#include <numeric>   // for accumulate
+#include <stdexcept> // for invalid_argument, runtime_error
+#include <string>    // for stoi, basic_string
+#include <thread>    // for thread
+#include <vector>    // for vector
+
+#include <pthread.h> // for pthread_self, pthread_setaffinity_np
+#include <sched.h>   // for cpu_set_t, CPU_SET, CPU_ZERO
+#include <stdlib.h>  // for exit
+
+#include "dro/spsc-queue.hpp" // for dro::SPSCQueue
 
 #if __has_include(<rigtorp/SPSCQueue.h> )
 #include <rigtorp/SPSCQueue.h>
@@ -26,75 +42,59 @@
 #include <readerwriterqueue/readerwriterqueue.h>
 #endif
 
-#include <chrono>
-#include <cstddef>
-#include <cstdio>
-#include <iostream>
-#include <numeric>
-#include <stdexcept>
-#include <thread>
-#include <vector>
-
-#include <pthread.h>
-#include <sched.h>
-
-void pinThread(int cpu)
-{
-  if (cpu < 0)
-  {
+void pinThread(int cpu) {
+  if (cpu < 0) {
     return;
   }
-  cpu_set_t cpu_set;
-  CPU_ZERO(&cpu_set);
-  CPU_SET(cpu, &cpu_set);
-  if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpu_set) == 1)
-  {
+  cpu_set_t cpuSet;
+  CPU_ZERO(&cpuSet);
+  CPU_SET(cpu, &cpuSet);
+  if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuSet) ==
+      -1) {
     perror("pthread_setaffinity_np");
     exit(1);
   }
 }
 
-int main(int argc, char* argv[])
-{
-  int cpu1 {-1};
-  int cpu2 {-1};
+int main(int argc, char *argv[]) {
+  int cpu1{-1};
+  int cpu2{-1};
 
-  if (argc == 3)
-  {
+  if (argc == 3) {
     cpu1 = std::stoi(argv[1]);
     cpu2 = std::stoi(argv[2]);
+  } else if (argc != 1) {
+    throw std::invalid_argument(
+        "Provide (2) arguments for CPU cores to utilize.");
   }
 
   // Alignas powers of 2 for convenient testing of various sizes
-  struct alignas(4) TestSize
-  {
+  struct alignas(4) TestSize {
     int x_;
     TestSize() = default;
     TestSize(int x) : x_(x) {}
   };
 
-  const std::size_t trialSize {5};
+  const std::size_t trialSize{5};
   static_assert(trialSize % 2, "Trial size must be odd");
 
-  const std::size_t queueSize {10'000'000};
-  const std::size_t iters {10'000'000};
+  const std::size_t queueSize{10'000'000};
+  const std::size_t iters{10'000'000};
   std::vector<std::size_t> operations(trialSize);
   std::vector<std::size_t> roundTripTime(trialSize);
 
   std::cout << "Dro SPSC_Queue: \n";
 
-  for (int i {}; i < trialSize; ++i)
-  {
+  for (int i{}; i < trialSize; ++i) {
     {
       dro::SPSCQueue<TestSize> queue(queueSize);
       auto thrd = std::thread([&]() {
         pinThread(cpu1);
-        for (int i {}; i < iters; ++i)
-        {
+        for (int i{}; i < iters; ++i) {
           TestSize val;
-          while (! queue.try_pop(val)) {}
-          if (val.x_ != i)
-          {
+          while (!queue.try_pop(val)) {
+          }
+          if (val.x_ != i) {
             throw std::runtime_error("Value not equal");
           }
         }
@@ -103,7 +103,9 @@ int main(int argc, char* argv[])
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i {}; i < iters; ++i) { queue.emplace(TestSize(i)); }
+      for (int i{}; i < iters; ++i) {
+        queue.emplace(TestSize(i));
+      }
       thrd.join();
       auto stop = std::chrono::steady_clock::now();
 
@@ -117,10 +119,10 @@ int main(int argc, char* argv[])
       dro::SPSCQueue<TestSize> q1(queueSize), q2(queueSize);
       auto thrd = std::thread([&]() {
         pinThread(cpu1);
-        for (int i {}; i < iters; ++i)
-        {
+        for (int i{}; i < iters; ++i) {
           TestSize val;
-          while (! q1.try_pop(val)) {}
+          while (!q1.try_pop(val)) {
+          }
           q2.emplace(val);
         }
       });
@@ -128,11 +130,11 @@ int main(int argc, char* argv[])
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i {}; i < iters; ++i)
-      {
+      for (int i{}; i < iters; ++i) {
         q1.emplace(TestSize(i));
         TestSize val;
-        while (! q2.try_pop(val)) {}
+        while (!q2.try_pop(val)) {
+        }
       }
       auto stop = std::chrono::steady_clock::now();
       thrd.join();
@@ -161,17 +163,15 @@ int main(int argc, char* argv[])
 
   std::cout << "Rigtorp SPSCQueue:" << std::endl;
 
-  for (int i {}; i < trialSize; ++i)
-  {
+  for (int i{}; i < trialSize; ++i) {
     {
       rigtorp::SPSCQueue<TestSize> q(queueSize);
       auto t = std::thread([&] {
         pinThread(cpu1);
-        for (int i = 0; i < iters; ++i)
-        {
-          while (! q.front());
-          if (q.front()->x_ != i)
-          {
+        for (int i = 0; i < iters; ++i) {
+          while (!q.front())
+            ;
+          if (q.front()->x_ != i) {
             throw std::runtime_error("");
           }
           q.pop();
@@ -181,7 +181,9 @@ int main(int argc, char* argv[])
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i = 0; i < iters; ++i) { q.emplace(TestSize(i)); }
+      for (int i = 0; i < iters; ++i) {
+        q.emplace(TestSize(i));
+      }
       t.join();
       auto stop = std::chrono::steady_clock::now();
       operations[i] =
@@ -194,9 +196,9 @@ int main(int argc, char* argv[])
       rigtorp::SPSCQueue<TestSize> q1(queueSize), q2(queueSize);
       auto t = std::thread([&] {
         pinThread(cpu1);
-        for (int i = 0; i < iters; ++i)
-        {
-          while (! q1.front());
+        for (int i = 0; i < iters; ++i) {
+          while (!q1.front())
+            ;
           q2.emplace(*(q1.front()));
           q1.pop();
         }
@@ -205,10 +207,10 @@ int main(int argc, char* argv[])
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i = 0; i < iters; ++i)
-      {
+      for (int i = 0; i < iters; ++i) {
         q1.emplace(TestSize(i));
-        while (! q2.front());
+        while (!q2.front())
+          ;
         q2.pop();
       }
       auto stop = std::chrono::steady_clock::now();
@@ -237,18 +239,16 @@ int main(int argc, char* argv[])
 
 #if __has_include(<boost/lockfree/spsc_queue.hpp> )
   std::cout << "boost::lockfree::spsc:" << std::endl;
-  for (int i {}; i < trialSize; ++i)
-  {
+  for (int i{}; i < trialSize; ++i) {
     {
       boost::lockfree::spsc_queue<TestSize> q(queueSize);
       auto t = std::thread([&] {
         pinThread(cpu1);
-        for (int i = 0; i < iters; ++i)
-        {
+        for (int i = 0; i < iters; ++i) {
           TestSize val;
-          while (q.pop(&val, 1) != 1);
-          if (val.x_ != i)
-          {
+          while (q.pop(&val, 1) != 1)
+            ;
+          if (val.x_ != i) {
             throw std::runtime_error("");
           }
         }
@@ -257,7 +257,10 @@ int main(int argc, char* argv[])
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i = 0; i < iters; ++i) { while (! q.push(TestSize(i))); }
+      for (int i = 0; i < iters; ++i) {
+        while (!q.push(TestSize(i)))
+          ;
+      }
       t.join();
       auto stop = std::chrono::steady_clock::now();
       operations[i] =
@@ -270,22 +273,24 @@ int main(int argc, char* argv[])
       boost::lockfree::spsc_queue<TestSize> q1(queueSize), q2(queueSize);
       auto t = std::thread([&] {
         pinThread(cpu1);
-        for (int i = 0; i < iters; ++i)
-        {
+        for (int i = 0; i < iters; ++i) {
           TestSize val;
-          while (q1.pop(&val, 1) != 1);
-          while (! q2.push(val));
+          while (q1.pop(&val, 1) != 1)
+            ;
+          while (!q2.push(val))
+            ;
         }
       });
 
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i = 0; i < iters; ++i)
-      {
-        while (! q1.push(TestSize(i)));
+      for (int i = 0; i < iters; ++i) {
+        while (!q1.push(TestSize(i)))
+          ;
         TestSize val;
-        while (q2.pop(&val, 1) != 1);
+        while (q2.pop(&val, 1) != 1)
+          ;
       }
       auto stop = std::chrono::steady_clock::now();
       t.join();
@@ -314,18 +319,16 @@ int main(int argc, char* argv[])
 
 #if __has_include(<folly/ProducerConsumerQueue.h>)
   std::cout << "folly::ProducerConsumerQueue:" << std::endl;
-  for (int i {}; i < trialSize; ++i)
-  {
+  for (int i{}; i < trialSize; ++i) {
     {
       folly::ProducerConsumerQueue<TestSize> q(queueSize);
       auto t = std::thread([&] {
         pinThread(cpu1);
-        for (int i = 0; i < iters; ++i)
-        {
+        for (int i = 0; i < iters; ++i) {
           TestSize val;
-          while (! q.read(val));
-          if (val.x_ != i)
-          {
+          while (!q.read(val))
+            ;
+          if (val.x_ != i) {
             throw std::runtime_error("");
           }
         }
@@ -334,7 +337,10 @@ int main(int argc, char* argv[])
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i = 0; i < iters; ++i) { while (! q.write(TestSize(i))); }
+      for (int i = 0; i < iters; ++i) {
+        while (!q.write(TestSize(i)))
+          ;
+      }
       t.join();
       auto stop = std::chrono::steady_clock::now();
       operations[i] =
@@ -347,10 +353,10 @@ int main(int argc, char* argv[])
       folly::ProducerConsumerQueue<TestSize> q1(queueSize), q2(queueSize);
       auto t = std::thread([&] {
         pinThread(cpu1);
-        for (int i = 0; i < iters; ++i)
-        {
+        for (int i = 0; i < iters; ++i) {
           TestSize val;
-          while (! q1.read(val));
+          while (!q1.read(val))
+            ;
           q2.write(val);
         }
       });
@@ -358,11 +364,12 @@ int main(int argc, char* argv[])
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i = 0; i < iters; ++i)
-      {
-        while (! q1.write(TestSize(i)));
+      for (int i = 0; i < iters; ++i) {
+        while (!q1.write(TestSize(i)))
+          ;
         TestSize val;
-        while (! q2.read(val));
+        while (!q2.read(val))
+          ;
       }
       auto stop = std::chrono::steady_clock::now();
       t.join();
@@ -391,19 +398,17 @@ int main(int argc, char* argv[])
 
 #if __has_include(<readerwriterqueue/readerwriterqueue.h>)
   std::cout << "moodycamel::ReaderWriterQueue" << std::endl;
-  for (int i {}; i < trialSize; ++i)
-  {
+  for (int i{}; i < trialSize; ++i) {
     {
       moodycamel::ReaderWriterQueue<TestSize> q(queueSize);
       auto t = std::thread([&] {
         pinThread(cpu1);
-        for (int i = 0; i < iters; ++i)
-        {
+        for (int i = 0; i < iters; ++i) {
           TestSize val;
-          while (! q.peek());
+          while (!q.peek())
+            ;
           q.try_dequeue(val);
-          if (val.x_ != i)
-          {
+          if (val.x_ != i) {
             throw std::runtime_error("");
           }
         }
@@ -412,7 +417,9 @@ int main(int argc, char* argv[])
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i = 0; i < iters; ++i) { q.try_enqueue(TestSize(i)); }
+      for (int i = 0; i < iters; ++i) {
+        q.try_enqueue(TestSize(i));
+      }
       t.join();
       auto stop = std::chrono::steady_clock::now();
       operations[i] =
@@ -425,10 +432,10 @@ int main(int argc, char* argv[])
       moodycamel::ReaderWriterQueue<TestSize> q1(queueSize), q2(queueSize);
       auto t = std::thread([&] {
         pinThread(cpu1);
-        for (int i = 0; i < iters; ++i)
-        {
+        for (int i = 0; i < iters; ++i) {
           TestSize val;
-          while (! q1.peek());
+          while (!q1.peek())
+            ;
           q1.try_dequeue(val);
           q2.try_enqueue(val);
         }
@@ -437,11 +444,11 @@ int main(int argc, char* argv[])
       pinThread(cpu2);
 
       auto start = std::chrono::steady_clock::now();
-      for (int i = 0; i < iters; ++i)
-      {
+      for (int i = 0; i < iters; ++i) {
         q1.try_enqueue(TestSize(i));
         TestSize val;
-        while (! q2.peek());
+        while (!q2.peek())
+          ;
         q2.try_dequeue(val);
       }
       auto stop = std::chrono::steady_clock::now();

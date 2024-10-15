@@ -1,29 +1,39 @@
-// Andrew Drogalis Copyright (c) 2024, GNU 3.0 Licence
+// Copyright (c) 2024 Andrew Drogalis
 //
-// Inspired from Erik Rigtorp
-// Significant Modifications / Improvements
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the “Software”), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// This library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
 
-#include <dro/spsc-queue.hpp>
-#include <thread>
+#include <dro/spsc-queue.hpp> // for dro::SPSCQueue
+#include <thread>             // for std::thread
 
-int main(int argc, char* argv[])
-{
-  int const iter {10};
-  dro::SPSCQueue<int> queue(1);
+int main(int argc, char *argv[]) {
+  int const iter{10};
+  int const size{10};
+  dro::SPSCQueue<int> queue(size);
   auto thrd = std::thread([&] {
-    for (int i {}; i < iter; ++i)
-    {
-      int val {};
-      while (! queue.try_pop(val)) {}
+    for (int i{}; i < iter; ++i) {
+      int val{};
+      while (!queue.try_pop(val)) {
+      }
     }
   });
 
-  for (int i {}; i < iter; ++i) { queue.push(i); }
+  for (int i{}; i < iter; ++i) {
+    queue.emplace(i);
+  }
+  // Can also use try_emplace
+  // for (int i {}; i < iter; ++i) { queue.try_emplace(i); }
+
+  // Can also use force_emplace
+  // for (int i {}; i < iter; ++i) { queue.force_emplace(i); }
+
   thrd.join();
 
   return 0;

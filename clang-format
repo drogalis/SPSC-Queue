@@ -1,4 +1,4 @@
-BasedOnStyle: Microsoft
+BasedOnStyle: LLVM
 AlignAfterOpenBracket: Align
 AlignConsecutiveMacros: 'true'
 AlignConsecutiveAssignments: 'true'
