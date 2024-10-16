@@ -1,7 +1,7 @@
 # SPSC Queue
 
-<!-- A STL compliant map and set that uses a red black tree under the hood. Much faster than [boost::flat_map](https://www.boost.org/doc/libs/1_76_0/boost/container/flat_map.hpp) for any insert or delete heavy workload over ~250 elements. -->
-<!-- Beats [std::map](https://en.cppreference.com/w/cpp/container/map) for all workloads when full optimizations are enabled. -->
+A SPSC queue that pre-allocates all memory and objects. Transfers messages to and from the queue using copy/move assignment. Achieves a top performance for all message sizes, even higher than [MoodyCamel ReaderWriterQueue](https://github.com/cameron314/readerwriterqueue)
+and [Rigtorp SPSCQueue](https://github.com/rigtorp/SPSCQueue).
 
 ## Table of Contents
 
@@ -12,53 +12,71 @@
 
 ## Implementation
 
-<!-- This flat map uses a vector to store the tree nodes, and maintains an approximate [heap](<https://en.wikipedia.org/wiki/Heap_(data_structure)#:~:text=In%20computer%20science%2C%20a%20heap,The%20node%20at%20the%20%22top%22>) -->
-<!-- structure for a cache optimized [binary search](https://en.wikipedia.org/wiki/Binary_search#:~:text=Binary%20search%20compares%20the%20target,the%20target%20value%20is%20found.). -->
-<!---->
-<!-- In order to validate the correctness of the balancing algorithm, a full tree traversal is performed comparing the dro::FlatMap to the [STL Tree](https://github.com/gcc-mirror/gcc/blob/master/libstdc++-v3/include/bits/stl_tree.h) -->
-<!-- implementation. Many red black trees have subtle errors due to lack of validation. -->
-
 _Detailed Discussion_
 
 ## Usage
 
-Main points:
+Notes:
 
-- The key and value must be default constructible.
-- The key and value must be copy or move assignable.
+- The type must be default constructible.
+- The type must be copy or move assignable.
 
 #### Constructor
 
 The full list of template arguments are as follows:
 
-- T: Must be default constructible and a copyable or moveable type
+- Type: Must be default constructible and a copyable or moveable type
 - Allocator: Allocator passed to the vector, takes the type T as the template parameter.
 
 - `explicit SPSCQueue(const std::size_t capacity, const Allocator& allocator = Allocator());`
 
-   Capacity must be a positive number
+  Capacity must be a positive number, and all memory is allocated in the constructor
 
 #### Methods
 
 - `void emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>);`
 
+  Constructs type in place, and waits on the reader if the queue is full.
+
 - `void force_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>);`
+
+  Constructs type in place, and writes over the reader if the queue is full.
+
+  **Note: Writes over entire queue, use with caution.**
 
 - `bool try_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>);`
 
+  Constructs type in place, and fails to write if the queue is full.
+
 - `void push(const T& val) noexcept(SPSC_NoThrow_Type<T>);`
+
+  Waits on the reader if the queue is full.
 
 - `void force_push(const T& val) noexcept(SPSC_NoThrow_Type<T>);`
 
+  Writes over the reader if the queue is full.
+
+  **Note: Writes over entire queue, use with caution.**
+
 - `[[nodiscard]] bool try_push(const T& val) noexcept(SPSC_NoThrow_Type<T>);`
+
+  Returns bool and fails to write if the queue is full.
 
 - `[[nodiscard]] bool try_pop(T& val) noexcept;`
 
+  Returns bool and fails to read if the queue is empty.
+
 - `[[nodiscard]] std::size_t size() const noexcept;`
+
+  Returns the number of elements in the SPSC Queue.
 
 - `[[nodiscard]] bool empty() const noexcept;`
 
+  Checks whether the container is empty.
+
 - `[[nodiscard]] std::size_t capacity() const noexcept;`
+
+  Returns the number of elements that have been allocated.
 
 ## Benchmarks
 
