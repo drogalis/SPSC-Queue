@@ -83,7 +83,7 @@ int main(int argc, char *argv[]) {
   std::vector<std::size_t> operations(trialSize);
   std::vector<std::size_t> roundTripTime(trialSize);
 
-  std::cout << "Dro SPSC_Queue: \n";
+  std::cout << "dro::SPSCQueue: \n";
 
   for (int i{}; i < trialSize; ++i) {
     {
@@ -147,6 +147,10 @@ int main(int argc, char *argv[]) {
 
   std::sort(operations.begin(), operations.end());
   std::sort(roundTripTime.begin(), roundTripTime.end());
+
+  // The median value is provided for a visual skewness reference. If the mean
+  // and median differ by more than ~5%, then the results are skewed and should
+  // be discarded.
   std::cout << "Mean: "
             << std::accumulate(operations.begin(), operations.end(), 0) /
                    trialSize
@@ -161,7 +165,7 @@ int main(int argc, char *argv[]) {
 
 #if __has_include(<rigtorp/SPSCQueue.h> )
 
-  std::cout << "Rigtorp SPSCQueue:" << std::endl;
+  std::cout << "\nrigtorp::SPSCQueue:\n";
 
   for (int i{}; i < trialSize; ++i) {
     {
@@ -238,7 +242,7 @@ int main(int argc, char *argv[]) {
 #endif
 
 #if __has_include(<boost/lockfree/spsc_queue.hpp> )
-  std::cout << "boost::lockfree::spsc:" << std::endl;
+  std::cout << "\nboost::lockfree::spsc:\n";
   for (int i{}; i < trialSize; ++i) {
     {
       boost::lockfree::spsc_queue<TestSize> q(queueSize);
@@ -318,7 +322,7 @@ int main(int argc, char *argv[]) {
 #endif
 
 #if __has_include(<folly/ProducerConsumerQueue.h>)
-  std::cout << "folly::ProducerConsumerQueue:" << std::endl;
+  std::cout << "\nfolly::ProducerConsumerQueue:\n";
   for (int i{}; i < trialSize; ++i) {
     {
       folly::ProducerConsumerQueue<TestSize> q(queueSize);
@@ -397,7 +401,7 @@ int main(int argc, char *argv[]) {
 #endif
 
 #if __has_include(<readerwriterqueue/readerwriterqueue.h>)
-  std::cout << "moodycamel::ReaderWriterQueue" << std::endl;
+  std::cout << "\nmoodycamel::ReaderWriterQueue\n";
   for (int i{}; i < trialSize; ++i) {
     {
       moodycamel::ReaderWriterQueue<TestSize> q(queueSize);
