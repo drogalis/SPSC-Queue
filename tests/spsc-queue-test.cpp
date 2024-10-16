@@ -1,79 +1,114 @@
-// Andrew Drogalis Copyright (c) 2024, GNU 3.0 Licence
+// Copyright (c) 2024 Andrew Drogalis
 //
-// Inspired from Erik Rigtorp
-// Significant Modifications / Improvements
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the “Software”), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// This library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
 
-#include <dro/spsc-queue.hpp>
+#include <cassert>   // for assert
+#include <iostream>  // for operator<<, basic_ostream, char_traits, cout
+#include <memory>    // for std::unique_ptr
+#include <stdexcept> // for std::logic_error
 
-#include <algorithm>
-#include <cassert>
-#include <iostream>
-#include <memory>
-#include <stdexcept>
+#include <dro/spsc-queue.hpp> // for dro::SPSCQueue
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char *argv[]) {
 
-  // Functional Tests
+  // Functional Tests Emplace
   {
-    dro::SPSCQueue<int> queue {10};
-    int val {};
-    assert(! queue.try_pop(val));
-    assert(! queue.size());
+    const int size{10};
+    dro::SPSCQueue<int> queue{size};
+    int val{};
+    assert(!queue.try_pop(val));
+    assert(!queue.size());
     assert(queue.empty());
     assert(queue.capacity() == 10);
-    for (int i = 0; i < 10; i++) { queue.emplace(i); }
+    for (int i = 0; i < size; i++) {
+      queue.emplace(i);
+    }
     assert(queue.try_pop(val));
     assert(queue.size() == 9);
-    assert(! queue.empty());
+    assert(!queue.empty());
     assert(queue.try_emplace(1));
-    assert(! queue.try_emplace(1));
-    bool discard = queue.try_pop(val);
+    assert(!queue.try_emplace(1));
+    assert(queue.size() == 10);
+    int forceVal{10};
+    queue.force_emplace(forceVal);
+    queue.force_emplace(forceVal);
+    assert(queue.try_pop(val));
+    assert(val == forceVal);
+  }
+
+  // Functional Tests Push
+  {
+    const int size{10};
+    dro::SPSCQueue<int> queue{size};
+    int val{};
+    assert(!queue.try_pop(val));
+    for (int i {}; i < size; i++) {
+      queue.push(i);
+    }
+    assert(queue.try_pop(val));
     assert(queue.size() == 9);
+    assert(!queue.empty());
+    assert(queue.try_push(1));
+    assert(!queue.try_push(1));
+    assert(queue.size() == 10);
+    int forceVal{10};
+    queue.force_push(forceVal);
+    queue.force_push(forceVal);
+    assert(queue.try_pop(val));
+    assert(val == forceVal);
   }
 
   // Copyable Only Object
   {
-    struct Test
-    {
-      Test()                       = default;
-      ~Test()                      = default;
-      Test(const Test&)            = default;
-      Test& operator=(const Test&) = default;
-      Test(Test&&)                 = delete;
-      Test& operator=(Test&&)      = delete;
+    struct Test {
+      Test() = default;
+      ~Test() = default;
+      Test(const Test &) = default;
+      Test &operator=(const Test &) = default;
+      Test(Test &&) = delete;
+      Test &operator=(Test &&) = delete;
     };
-    dro::SPSCQueue<Test> queue {16};
-    Test v;
-    queue.emplace(v);
-    queue.try_emplace(v);
-    queue.push(v);
-    bool discard = queue.try_push(v);
-    assert(queue.size() == 4);
-    static_assert(noexcept(queue.emplace(v)));
-    static_assert(noexcept(queue.try_emplace(v)));
-    static_assert(noexcept(queue.push(v)));
-    static_assert(noexcept(queue.try_push(v)));
-    // rvalue
+    const int size{10};
+    dro::SPSCQueue<Test> queue{size};
+    Test val;
+    queue.emplace(val);
+    queue.try_emplace(val);
+    queue.force_emplace(val);
+    queue.push(val);
+    bool discard = queue.try_push(val);
+    queue.force_emplace(val);
+    assert(queue.size() == 6);
+    static_assert(noexcept(queue.emplace(val)));
+    static_assert(noexcept(queue.try_emplace(val)));
+    static_assert(noexcept(queue.force_emplace(val)));
+    static_assert(noexcept(queue.push(val)));
+    static_assert(noexcept(queue.try_push(val)));
+    static_assert(noexcept(queue.force_push(val)));
+    // Test R-Value
     queue.push(Test());
     discard = queue.try_push(Test());
+    queue.force_push(Test());
     static_assert(noexcept(queue.push(Test())));
     static_assert(noexcept(queue.try_push(Test())));
-    assert(queue.size() == 6);
-    // Pop
-    Test val;
+    static_assert(noexcept(queue.force_push(Test())));
+    assert(queue.size() == 9);
+    // Try Pop
     discard = queue.try_pop(val);
-    assert(queue.size() == 5);
+    assert(queue.size() == 8);
   }
 
   // Moveable Only Object
   {
-    dro::SPSCQueue<std::unique_ptr<int>> queue {16};
+    const int size{10};
+    dro::SPSCQueue<std::unique_ptr<int>> queue{size};
     queue.emplace(std::make_unique<int>(1));
     queue.try_emplace(std::make_unique<int>(1));
     queue.push(std::make_unique<int>(1));
@@ -93,14 +128,11 @@ int main(int argc, char* argv[])
 
   // Constructor Exception
   {
-    try
-    {
+    try {
       dro::SPSCQueue<int> queue(0);
-      assert(false);// Should never be called
-    }
-    catch (std::logic_error& e)
-    {
-      assert(true);// Should always be called
+      assert(false); // Should never be called
+    } catch (std::logic_error &e) {
+      assert(true); // Should always be called
     }
   }
 
