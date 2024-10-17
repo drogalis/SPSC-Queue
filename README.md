@@ -1,32 +1,27 @@
 # SPSC Queue
 
-A SPSC queue that pre-allocates all memory and objects. Transfers messages to and from the queue using copy/move assignment. Achieves a top performance for all message sizes, even higher than [MoodyCamel ReaderWriterQueue](https://github.com/cameron314/readerwriterqueue)
+A SPSC lock free queue that pre-allocates all memory and transfers messages to and from the queue using copy/move assignment. Achieves a top performance for all message sizes, even higher than [MoodyCamel ReaderWriterQueue](https://github.com/cameron314/readerwriterqueue)
 and [Rigtorp SPSCQueue](https://github.com/rigtorp/SPSCQueue).
 
 ## Table of Contents
 
-- [Usage](#Usage)
 - [Benchmarks](#Benchmarks)
+- [Implementation](#Implementation)
 - [Installing](#Installing)
 - [Sources](#Sources)
 
-## Implementation
-
-_Detailed Discussion_
-
 ## Usage
 
-Notes:
-
-- The type must be default constructible.
-- The type must be copy or move assignable.
-
-#### Constructor
+The queue uses C++20 concepts to overload the read and write operations, by default all reads and writes are moved into and out of
+the queue. If the type is non-movable then copy assignment will be used instead.
 
 The full list of template arguments are as follows:
 
-- Type: Must be default constructible and a copyable or moveable type
-- Allocator: Allocator passed to the vector, takes the type T as the template parameter.
+- Type: Must be default constructible and must be copy or move assignable.
+
+- Allocator: Allocator to be passed to the vector, takes the type T as the template parameter.
+
+#### Constructor
 
 - `explicit SPSCQueue(const std::size_t capacity, const Allocator& allocator = Allocator());`
 
@@ -42,11 +37,11 @@ The full list of template arguments are as follows:
 
   Constructs type in place, and writes over the reader if the queue is full.
 
-  **Note: Writes over entire queue, use with caution.**
+  **Note: If writer surpasses reader, the entire queue will be erased. Use with caution.**
 
 - `bool try_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>);`
 
-  Constructs type in place, and fails to write if the queue is full.
+  Returns bool, and constructs type in place. Fails to write if the queue is full.
 
 - `void push(const T& val) noexcept(SPSC_NoThrow_Type<T>);`
 
@@ -56,19 +51,19 @@ The full list of template arguments are as follows:
 
   Writes over the reader if the queue is full.
 
-  **Note: Writes over entire queue, use with caution.**
+  **Note: If writer surpasses reader, the entire queue will be erased. Use with caution.**
 
 - `[[nodiscard]] bool try_push(const T& val) noexcept(SPSC_NoThrow_Type<T>);`
 
-  Returns bool and fails to write if the queue is full.
+  Returns bool, and fails to write if the queue is full.
 
 - `[[nodiscard]] bool try_pop(T& val) noexcept;`
 
-  Returns bool and fails to read if the queue is empty.
+  Returns bool, and fails to read if the queue is empty.
 
 - `[[nodiscard]] std::size_t size() const noexcept;`
 
-  Returns the number of elements in the SPSC Queue.
+  Returns the number of elements in the SPSC queue.
 
 - `[[nodiscard]] bool empty() const noexcept;`
 
@@ -95,6 +90,10 @@ These benchmarks are the average of (11) iterations.
 
 <img src="https://raw.githubusercontent.com/drogalis/SPSC-Queue/refs/heads/main/assets/Round%20Trip%20Time%20(ns).png" alt="Round Trip Time Stats" style="padding-top: 10px;">
 
+## Implementation
+
+_Detailed Discussion_
+
 ## Installing
 
 **Required C++20 or higher.**
@@ -103,7 +102,8 @@ To build and install the shared library, run the commands below.
 
 ```
     $ mkdir build && cd build
-    $ cmake .. -DCMAKE_BUILD_TYPE=Release
+    $ cmake ..
+    $ make
     $ sudo make install
 ```
 
