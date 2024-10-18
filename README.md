@@ -92,7 +92,17 @@ These benchmarks are the average of (11) iterations.
 
 ## Implementation
 
-_Detailed Discussion_
+The following is are screenshots from Perf of the main CPU hotspots for each thread. The number one bottleneck is the `mov` into the queue and out of the queue. The second most time consuming operation is the atomic load and store.
+
+In the future, I will download the Intel microcode drivers and get a deeper understanding of how exactly the code is executing. Other SPSC queues produce similar assembly code and have different performance characteristics. These differences will likely show up in the microcode analysis.
+
+**Push Operation**
+
+<img src="https://raw.githubusercontent.com/drogalis/SPSC-Queue/refs/heads/main/assets/perf-push.png" alt="Perf Push Analysis" style="padding-top: 10px; padding-bottom: 10px;">
+
+**Pop Operation**
+
+<img src="https://raw.githubusercontent.com/drogalis/SPSC-Queue/refs/heads/main/assets/perf-pop.png" alt="Perf Pop Analysis" style="padding-top: 10px;">
 
 ## Installing
 
