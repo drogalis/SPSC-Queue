@@ -19,7 +19,7 @@ The full list of template arguments are as follows:
 
 - Type: Must be default constructible and must be copy or move assignable.
 
-- std::size_t N: The number of object to allocate on the stack, default is 0.
+- std::size_t: The number of object to allocate on the stack, default is 0.
 
 - Allocator: Allocator to be passed to the vector, takes the type T as the template parameter.
 
@@ -32,6 +32,8 @@ dro::SPSCQueue<T, size> queue;
 // Custom Allocator on the Heap
 dro::SPSCQueue<T, 0, std::allocator<T>> queue(size);
 ```
+
+**Allocate small queues on the stack, under 2MBs** 
 
 #### Constructor
 
@@ -96,7 +98,7 @@ Most important aspects of benchmarking:
 - Compile with -DCMAKE_BUILD_TYPE=Release
 - Pass isolated cores ID number as an executable argument i.e. ./SPSC-Queue-Benchmark 2 3
 
-These benchmarks are the average of (11) iterations.
+These benchmarks are the average of (11) iterations for a heap allocated queue.
 
 <img src="https://raw.githubusercontent.com/drogalis/SPSC-Queue/refs/heads/main/assets/Operations%20per%20Millisecond.png" alt="Operations Per Millisecond Stats" style="padding-top: 10px;">
 

@@ -35,7 +35,7 @@ static constexpr std::size_t cacheLineSize =
 static constexpr std::size_t cacheLineSize = 64;
 #endif
 
-static constexpr std::size_t MAX_BYTES_ON_STACK = 262'144;
+static constexpr std::size_t MAX_BYTES_ON_STACK = 2'097'152; // 2 MBs
 
 template <typename T>
 concept SPSC_Type =
@@ -49,7 +49,7 @@ concept SPSC_NoThrow_Type =
     ((std::is_nothrow_copy_assignable_v<T> && std::is_copy_assignable_v<T>) ||
      (std::is_nothrow_move_assignable_v<T> && std::is_move_assignable_v<T>));
 
-// Trying to prevent seg faults at compile time
+// Prevents Stack Overflow
 template <typename T, std::size_t N>
 concept MAX_STACK_SIZE = (N < (MAX_BYTES_ON_STACK / sizeof(T)));
 
@@ -95,6 +95,7 @@ struct StackBuffer {
   static constexpr std::size_t padding = ((cacheLineSize - 1) / sizeof(T)) + 1;
 
   std::size_t capacity_;
+  // (2 * padding) is for preventing cache contention between adjacent memory
   std::array<T, N + (2 * padding) + 1> buffer_;
 
   explicit StackBuffer(const std::size_t capacity,
