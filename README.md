@@ -19,11 +19,23 @@ The full list of template arguments are as follows:
 
 - Type: Must be default constructible and must be copy or move assignable.
 
+- std::size_t N: The number of object to allocate on the stack, default is 0.
+
 - Allocator: Allocator to be passed to the vector, takes the type T as the template parameter.
+
+Examples:
+```cpp
+// Default Heap Allocation
+dro::SPSCQueue<T> queue(size);
+// Stack Allocation
+dro::SPSCQueue<T, size> queue;
+// Custom Allocator on the Heap
+dro::SPSCQueue<T, 0, std::allocator<T>> queue(size);
+```
 
 #### Constructor
 
-- `explicit SPSCQueue(const std::size_t capacity, const Allocator& allocator = Allocator());`
+- `explicit SPSCQueue(const std::size_t capacity = 0, const Allocator& allocator = Allocator());`
 
   Capacity must be a positive number, and all memory is allocated in the constructor
 
