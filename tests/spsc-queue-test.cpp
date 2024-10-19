@@ -66,6 +66,28 @@ int main(int argc, char *argv[]) {
     assert(val == forceVal);
   }
 
+  // Stack Allocated Queue
+  {
+    constexpr int size{10};
+    dro::SPSCQueue<int, size> queue;
+    int val{};
+    assert(!queue.try_pop(val));
+    for (int i {}; i < size; i++) {
+      queue.push(i);
+    }
+    assert(queue.try_pop(val));
+    assert(queue.size() == 9);
+    assert(!queue.empty());
+    assert(queue.try_push(1));
+    assert(!queue.try_push(1));
+    assert(queue.size() == 10);
+    int forceVal{10};
+    queue.force_push(forceVal);
+    queue.force_push(forceVal);
+    assert(queue.try_pop(val));
+    assert(val == forceVal);
+  }
+
   // Copyable Only Object
   {
     struct Test {
@@ -105,6 +127,8 @@ int main(int argc, char *argv[]) {
     assert(queue.size() == 9);
     // Try Pop
     discard = queue.try_pop(val);
+    assert(val.x_ == 5);
+    assert(val.y_ == 0);
     assert(queue.size() == 8);
   }
 
@@ -133,6 +157,14 @@ int main(int argc, char *argv[]) {
   {
     try {
       dro::SPSCQueue<int> queue(0);
+      assert(false); // Should never be called
+    } catch (std::logic_error &e) {
+      assert(true); // Should always be called
+    }
+  }
+  {
+    try {
+      dro::SPSCQueue<int, 10> queue(10);
       assert(false); // Should never be called
     } catch (std::logic_error &e) {
       assert(true); // Should always be called
