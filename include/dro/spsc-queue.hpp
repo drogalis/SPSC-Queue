@@ -67,9 +67,9 @@ public:
     }
     // (2 * padding) is for preventing cache contention between adjacent memory
     // - 1 is for the ++capacity_ argument (rare overflow edge case)
-    capacity_ = (capacity_ < MAX_SIZE_T - (2 * padding) - 1)
-                    ? capacity_
-                    : MAX_SIZE_T - (2 * padding) - 1;
+    if (capacity_ > MAX_SIZE_T - (2 * padding) - 1) {
+      throw std::overflow_error("Capacity with padding exceeds std::size_t. Reduce size of queue.");
+    }
     ++capacity_;// prevents live lock e.g. reader and writer share 1 slot for
                 // size 1
     buffer_.resize(capacity_ + (2 * padding));
@@ -91,7 +91,7 @@ public:
     while (nextWriteIndex == readIndexCache_) {
       readIndexCache_ = readIndex_.load(std::memory_order_acquire);
     }
-    write_value(writeIndex, std::forward<Args...>((args)...));
+    write_value(writeIndex, std::forward<Args>(args)...);
     writeIndex_.store(nextWriteIndex, std::memory_order_release);
   }
 
@@ -100,7 +100,7 @@ public:
   void force_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>) {
     auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
     auto nextWriteIndex   = (writeIndex == capacity_ - 1) ? 0 : writeIndex + 1;
-    write_value(writeIndex, std::forward<Args...>((args)...));
+    write_value(writeIndex, std::forward<Args>(args)...);
     writeIndex_.store(nextWriteIndex, std::memory_order_release);
   }
 
@@ -116,7 +116,7 @@ public:
         return false;
       }
     }
-    write_value(writeIndex, std::forward<Args&&...>((args)...));
+    write_value(writeIndex, std::forward<Args>(args)...);
     writeIndex_.store(nextWriteIndex, std::memory_order_release);
     return true;
   }
@@ -191,7 +191,6 @@ private:
   }
 
   T&& read_value(const auto readIndex) noexcept(SPSC_NoThrow_Type<T>)
-    requires std::is_move_assignable_v<T>
   {
     return std::move(buffer_[readIndex + padding]);
   }
@@ -209,18 +208,19 @@ private:
   }
 
   template <typename... Args>
-    requires std::constructible_from<T, Args...> &&
-             std::is_copy_assignable_v<T> && (! std::is_move_assignable_v<T>)
+    requires (std::constructible_from<T, Args...> &&
+             std::is_copy_assignable_v<T> && (! std::is_move_assignable_v<T>))
   void write_value(const auto writeIndex,
                    Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>) {
-    buffer_[writeIndex + padding] = T(std::forward<Args>(args)...);
+    T copyOnly {std::forward<Args>(args)...};
+    buffer_[writeIndex + padding] = copyOnly;
   }
 
   template <typename... Args>
-    requires std::constructible_from<T, Args...> && std::is_move_assignable_v<T>
+    requires (std::constructible_from<T, Args...> && std::is_move_assignable_v<T>)
   void write_value(const auto writeIndex,
                    Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>) {
-    buffer_[writeIndex + padding] = std::move(T(std::forward<Args>(args)...));
+    buffer_[writeIndex + padding] = T(std::forward<Args>(args)...);
   }
 };
 
