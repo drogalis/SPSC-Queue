@@ -69,7 +69,10 @@ int main(int argc, char *argv[]) {
   // Copyable Only Object
   {
     struct Test {
+      int x_;
+      int y_;
       Test() = default;
+      Test(int x, int y) : x_(x), y_(y) {} 
       ~Test() = default;
       Test(const Test &) = default;
       Test &operator=(const Test &) = default;
@@ -78,9 +81,9 @@ int main(int argc, char *argv[]) {
     };
     const int size{10};
     dro::SPSCQueue<Test> queue{size};
-    Test val;
-    queue.emplace(val);
-    queue.try_emplace(val);
+    Test val{};
+    queue.emplace(5, 0);
+    queue.try_emplace(5, 0);
     queue.force_emplace(val);
     queue.push(val);
     bool discard = queue.try_push(val);
