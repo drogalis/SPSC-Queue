@@ -13,17 +13,20 @@
 #ifndef DRO_SPSC_QUEUE
 #define DRO_SPSC_QUEUE
 
-#include <atomic>     // for atomic, memory_order
-#include <concepts>   // for concept, requires
-#include <cstddef>    // for size_t
-#include <limits>     // for numeric_limits
-#include <new>        // for std::hardware_destructive_interference_size
-#include <stdexcept>  // for std::logic_error
-#include <type_traits>// for std::is_default_constructible
-#include <utility>    // for forward
-#include <vector>     // for vector, allocator
+#include <array>       // for std::array
+#include <atomic>      // for atomic, memory_order
+#include <concepts>    // for concept, requires
+#include <cstddef>     // for size_t
+#include <limits>      // for numeric_limits
+#include <new>         // for std::hardware_destructive_interference_size
+#include <stdexcept>   // for std::logic_error
+#include <type_traits> // for std::is_default_constructible
+#include <utility>     // for forward
+#include <vector>      // for vector, allocator
 
 namespace dro {
+
+namespace details {
 
 #ifdef __cpp_lib_hardware_interference_size
 static constexpr std::size_t cacheLineSize =
@@ -31,6 +34,8 @@ static constexpr std::size_t cacheLineSize =
 #else
 static constexpr std::size_t cacheLineSize = 64;
 #endif
+
+static constexpr std::size_t MAX_BYTES_ON_STACK = 262'144;
 
 template <typename T>
 concept SPSC_Type =
@@ -40,12 +45,17 @@ concept SPSC_Type =
 
 template <typename T, typename... Args>
 concept SPSC_NoThrow_Type =
-    std::is_nothrow_constructible_v<T, Args&&...> &&
+    std::is_nothrow_constructible_v<T, Args &&...> &&
     ((std::is_nothrow_copy_assignable_v<T> && std::is_copy_assignable_v<T>) ||
      (std::is_nothrow_move_assignable_v<T> && std::is_move_assignable_v<T>));
 
-template <SPSC_Type T, typename Allocator = std::allocator<T>> class SPSCQueue {
-private:
+// Trying to prevent seg faults at compile time
+template <typename T, std::size_t N>
+concept MAX_STACK_SIZE = (N < (MAX_BYTES_ON_STACK / sizeof(T)));
+
+// Memory Allocated on the Heap (Default Option)
+template <SPSC_Type T, typename Allocator = std::allocator<T>>
+struct HeapBuffer {
   std::size_t capacity_;
   std::vector<T, Allocator> buffer_;
 
@@ -53,40 +63,95 @@ private:
   static constexpr std::size_t MAX_SIZE_T =
       std::numeric_limits<std::size_t>::max();
 
-  alignas(cacheLineSize) std::atomic<std::size_t> readIndex_ {0};
-  alignas(cacheLineSize) std::size_t readIndexCache_ {0};
-  alignas(cacheLineSize) std::atomic<std::size_t> writeIndex_ {0};
-  alignas(cacheLineSize) std::size_t writeIndexCache_ {0};
-
-public:
-  explicit SPSCQueue(const std::size_t capacity,
-                     const Allocator& allocator = Allocator())
+  explicit HeapBuffer(const std::size_t capacity,
+                      const Allocator &allocator = Allocator())
       : capacity_(capacity), buffer_(allocator) {
     if (capacity_ < 1) {
-      throw std::logic_error("Capacity must be a positive number");
+      throw std::logic_error("Capacity must be a positive number; Heap "
+                             "allocations require capacity argument");
     }
     // (2 * padding) is for preventing cache contention between adjacent memory
     // - 1 is for the ++capacity_ argument (rare overflow edge case)
     if (capacity_ > MAX_SIZE_T - (2 * padding) - 1) {
-      throw std::overflow_error("Capacity with padding exceeds std::size_t. Reduce size of queue.");
+      throw std::overflow_error(
+          "Capacity with padding exceeds std::size_t. Reduce size of queue.");
     }
-    ++capacity_;// prevents live lock e.g. reader and writer share 1 slot for
-                // size 1
+    ++capacity_; // prevents live lock e.g. reader and writer share 1 slot for
+                 // size 1
     buffer_.resize(capacity_ + (2 * padding));
   }
 
+  ~HeapBuffer() = default;
+  // Non-Copyable and Non-Movable
+  HeapBuffer(const HeapBuffer &lhs) = delete;
+  HeapBuffer &operator=(const HeapBuffer &lhs) = delete;
+  HeapBuffer(HeapBuffer &&lhs) = delete;
+  HeapBuffer &operator=(HeapBuffer &&lhs) = delete;
+};
+
+// Memory Allocated on the Stack
+template <SPSC_Type T, std::size_t N, typename Allocator = std::allocator<T>>
+struct StackBuffer {
+  static constexpr std::size_t padding = ((cacheLineSize - 1) / sizeof(T)) + 1;
+
+  std::size_t capacity_;
+  std::array<T, N + (2 * padding) + 1> buffer_;
+
+  explicit StackBuffer(const std::size_t capacity,
+                       const Allocator &allocator = Allocator())
+      : capacity_(N + 1) {
+    // Local capacity value
+    if (capacity) {
+      throw std::invalid_argument(
+          "Capacity in constructor is ignored for stack allocations");
+    }
+  }
+
+  ~StackBuffer() = default;
+  // Non-Copyable and Non-Movable
+  StackBuffer(const StackBuffer &lhs) = delete;
+  StackBuffer &operator=(const StackBuffer &lhs) = delete;
+  StackBuffer(StackBuffer &&lhs) = delete;
+  StackBuffer &operator=(StackBuffer &&lhs) = delete;
+};
+
+} // namespace details
+
+template <details::SPSC_Type T, std::size_t N = 0,
+          typename Allocator = std::allocator<T>>
+  requires details::MAX_STACK_SIZE<T, N>
+class SPSCQueue
+    : public std::conditional_t<N == 0, details::HeapBuffer<T, Allocator>,
+                                details::StackBuffer<T, N>> {
+private:
+  using base_type =
+      std::conditional_t<N == 0, details::HeapBuffer<T, Allocator>,
+                         details::StackBuffer<T, N>>;
+
+  alignas(details::cacheLineSize) std::atomic<std::size_t> readIndex_{0};
+  alignas(details::cacheLineSize) std::size_t readIndexCache_{0};
+  alignas(details::cacheLineSize) std::atomic<std::size_t> writeIndex_{0};
+  alignas(details::cacheLineSize) std::size_t writeIndexCache_{0};
+
+public:
+  explicit SPSCQueue(const std::size_t capacity = 0,
+                     const Allocator &allocator = Allocator())
+      : base_type(capacity, allocator) {}
+
   ~SPSCQueue() = default;
   // Non-Copyable and Non-Movable
-  SPSCQueue(const SPSCQueue& lhs)            = delete;
-  SPSCQueue& operator=(const SPSCQueue& lhs) = delete;
-  SPSCQueue(SPSCQueue&& lhs)                 = delete;
-  SPSCQueue& operator=(SPSCQueue&& lhs)      = delete;
+  SPSCQueue(const SPSCQueue &lhs) = delete;
+  SPSCQueue &operator=(const SPSCQueue &lhs) = delete;
+  SPSCQueue(SPSCQueue &&lhs) = delete;
+  SPSCQueue &operator=(SPSCQueue &&lhs) = delete;
 
   template <typename... Args>
     requires std::constructible_from<T, Args...>
-  void emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>) {
+  void
+  emplace(Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
     auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
-    auto nextWriteIndex   = (writeIndex == capacity_ - 1) ? 0 : writeIndex + 1;
+    auto nextWriteIndex =
+        (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
     // Loop while waiting for reader to catch up
     while (nextWriteIndex == readIndexCache_) {
       readIndexCache_ = readIndex_.load(std::memory_order_acquire);
@@ -97,18 +162,22 @@ public:
 
   template <typename... Args>
     requires std::constructible_from<T, Args...>
-  void force_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>) {
+  void force_emplace(Args &&...args) noexcept(
+      details::SPSC_NoThrow_Type<T, Args...>) {
     auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
-    auto nextWriteIndex   = (writeIndex == capacity_ - 1) ? 0 : writeIndex + 1;
+    auto nextWriteIndex =
+        (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
     write_value(writeIndex, std::forward<Args>(args)...);
     writeIndex_.store(nextWriteIndex, std::memory_order_release);
   }
 
   template <typename... Args>
     requires std::constructible_from<T, Args...>
-  bool try_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>) {
+  bool
+  try_emplace(Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
     auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
-    auto nextWriteIndex   = (writeIndex == capacity_ - 1) ? 0 : writeIndex + 1;
+    auto nextWriteIndex =
+        (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
     // Check reader cache and if actually equal then fail to write
     if (nextWriteIndex == readIndexCache_) {
       readIndexCache_ = readIndex_.load(std::memory_order_acquire);
@@ -121,35 +190,39 @@ public:
     return true;
   }
 
-  void push(const T& val) noexcept(SPSC_NoThrow_Type<T>) { emplace(val); }
+  void push(const T &val) noexcept(details::SPSC_NoThrow_Type<T>) {
+    emplace(val);
+  }
 
   template <typename P>
-    requires std::constructible_from<T, P&&>
-  void push(P&& val) noexcept(SPSC_NoThrow_Type<T, P&&>) {
+    requires std::constructible_from<T, P &&>
+  void push(P &&val) noexcept(details::SPSC_NoThrow_Type<T, P &&>) {
     emplace(std::forward<P>(val));
   }
 
-  void force_push(const T& val) noexcept(SPSC_NoThrow_Type<T>) {
+  void force_push(const T &val) noexcept(details::SPSC_NoThrow_Type<T>) {
     force_emplace(val);
   }
 
   template <typename P>
-    requires std::constructible_from<T, P&&>
-  void force_push(P&& val) noexcept(SPSC_NoThrow_Type<T, P&&>) {
+    requires std::constructible_from<T, P &&>
+  void force_push(P &&val) noexcept(details::SPSC_NoThrow_Type<T, P &&>) {
     force_emplace(std::forward<P>(val));
   }
 
-  [[nodiscard]] bool try_push(const T& val) noexcept(SPSC_NoThrow_Type<T>) {
+  [[nodiscard]] bool
+  try_push(const T &val) noexcept(details::SPSC_NoThrow_Type<T>) {
     return try_emplace(val);
   }
 
   template <typename P>
-    requires std::constructible_from<T, P&&>
-  [[nodiscard]] bool try_push(P&& val) noexcept(SPSC_NoThrow_Type<T, P&&>) {
+    requires std::constructible_from<T, P &&>
+  [[nodiscard]] bool
+  try_push(P &&val) noexcept(details::SPSC_NoThrow_Type<T, P &&>) {
     return try_emplace(std::forward<P>(val));
   }
 
-  [[nodiscard]] bool try_pop(T& val) noexcept {
+  [[nodiscard]] bool try_pop(T &val) noexcept {
     const auto readIndex = readIndex_.load(std::memory_order_relaxed);
     // Check writer cache and if actually equal then fail to read
     if (readIndex == writeIndexCache_) {
@@ -158,20 +231,21 @@ public:
         return false;
       }
     }
-    val                = read_value(readIndex);
-    auto nextReadIndex = (readIndex == capacity_ - 1) ? 0 : readIndex + 1;
+    val = read_value(readIndex);
+    auto nextReadIndex =
+        (readIndex == base_type::capacity_ - 1) ? 0 : readIndex + 1;
     readIndex_.store(nextReadIndex, std::memory_order_release);
     return true;
   }
 
   [[nodiscard]] std::size_t size() const noexcept {
     auto writeIndex = writeIndex_.load(std::memory_order_acquire);
-    auto readIndex  = readIndex_.load(std::memory_order_acquire);
+    auto readIndex = readIndex_.load(std::memory_order_acquire);
     // This method prevents conversion to std::ptrdiff_t (a signed type)
     if (writeIndex >= readIndex) {
       return writeIndex - readIndex;
     }
-    return (capacity_ - readIndex) + writeIndex;
+    return (base_type::capacity_ - readIndex) + writeIndex;
   }
 
   [[nodiscard]] bool empty() const noexcept {
@@ -179,50 +253,57 @@ public:
            readIndex_.load(std::memory_order_acquire);
   }
 
-  [[nodiscard]] std::size_t capacity() const noexcept { return capacity_ - 1; }
+  [[nodiscard]] std::size_t capacity() const noexcept {
+    return base_type::capacity_ - 1;
+  }
 
 private:
   // Note: The "+ padding" is a constant offset used to prevent false sharing
   // with memory in front of the SPSC allocations
-  T& read_value(const auto readIndex) noexcept(SPSC_NoThrow_Type<T>)
-    requires std::is_copy_assignable_v<T> && (! std::is_move_assignable_v<T>)
+  T &read_value(const auto readIndex) noexcept(details::SPSC_NoThrow_Type<T>)
+    requires std::is_copy_assignable_v<T> && (!std::is_move_assignable_v<T>)
   {
-    return buffer_[readIndex + padding];
+    return base_type::buffer_[readIndex + base_type::padding];
   }
 
-  T&& read_value(const auto readIndex) noexcept(SPSC_NoThrow_Type<T>)
-  {
-    return std::move(buffer_[readIndex + padding]);
+  T &&read_value(const auto readIndex) noexcept(details::SPSC_NoThrow_Type<T>) {
+    return std::move(base_type::buffer_[readIndex + base_type::padding]);
   }
 
-  void write_value(const auto writeIndex, T val) noexcept(SPSC_NoThrow_Type<T>)
-    requires std::is_copy_assignable_v<T> && (! std::is_move_assignable_v<T>)
+  void write_value(const auto writeIndex,
+                   T val) noexcept(details::SPSC_NoThrow_Type<T>)
+    requires std::is_copy_assignable_v<T> && (!std::is_move_assignable_v<T>)
   {
-    buffer_[writeIndex + padding] = val;
+    base_type::buffer_[writeIndex + base_type::padding] = val;
   }
 
-  void write_value(const auto writeIndex, T val) noexcept(SPSC_NoThrow_Type<T>)
+  void write_value(const auto writeIndex,
+                   T val) noexcept(details::SPSC_NoThrow_Type<T>)
     requires std::is_move_assignable_v<T>
   {
-    buffer_[writeIndex + padding] = std::move(val);
+    base_type::buffer_[writeIndex + base_type::padding] = std::move(val);
   }
 
   template <typename... Args>
-    requires (std::constructible_from<T, Args...> &&
-             std::is_copy_assignable_v<T> && (! std::is_move_assignable_v<T>))
-  void write_value(const auto writeIndex,
-                   Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>) {
-    T copyOnly {std::forward<Args>(args)...};
-    buffer_[writeIndex + padding] = copyOnly;
+    requires(std::constructible_from<T, Args...> &&
+             std::is_copy_assignable_v<T> && (!std::is_move_assignable_v<T>))
+  void
+  write_value(const auto writeIndex,
+              Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
+    T copyOnly{std::forward<Args>(args)...};
+    base_type::buffer_[writeIndex + base_type::padding] = copyOnly;
   }
 
   template <typename... Args>
-    requires (std::constructible_from<T, Args...> && std::is_move_assignable_v<T>)
-  void write_value(const auto writeIndex,
-                   Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>) {
-    buffer_[writeIndex + padding] = T(std::forward<Args>(args)...);
+    requires(std::constructible_from<T, Args...> &&
+             std::is_move_assignable_v<T>)
+  void
+  write_value(const auto writeIndex,
+              Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
+    base_type::buffer_[writeIndex + base_type::padding] =
+        T(std::forward<Args>(args)...);
   }
 };
 
-}// namespace dro
+} // namespace dro
 #endif
