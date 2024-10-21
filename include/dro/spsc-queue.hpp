@@ -135,7 +135,7 @@ private:
     std::size_t writeIndexCache_{0};
     // This improves the performance of very small queues, and the writer uses
     // the base_type::capacity_
-    std::size_t capacityCache_ {};
+    std::size_t capacityCache_{};
   } reader_;
 
 public:
@@ -153,9 +153,9 @@ public:
   SPSCQueue &operator=(SPSCQueue &&lhs) = delete;
 
   template <typename... Args>
-    requires std::constructible_from<T, Args...>
+    requires std::constructible_from<T, Args &&...>
   void
-  emplace(Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
+  emplace(Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args &&...>) {
     auto const writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     auto nextWriteIndex =
         (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
@@ -169,9 +169,9 @@ public:
   }
 
   template <typename... Args>
-    requires std::constructible_from<T, Args...>
+    requires std::constructible_from<T, Args &&...>
   void force_emplace(Args &&...args) noexcept(
-      details::SPSC_NoThrow_Type<T, Args...>) {
+      details::SPSC_NoThrow_Type<T, Args &&...>) {
     auto const writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     auto nextWriteIndex =
         (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
@@ -180,9 +180,9 @@ public:
   }
 
   template <typename... Args>
-    requires std::constructible_from<T, Args...>
-  bool
-  try_emplace(Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
+    requires std::constructible_from<T, Args &&...>
+  bool try_emplace(Args &&...args) noexcept(
+      details::SPSC_NoThrow_Type<T, Args &&...>) {
     auto const writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     auto nextWriteIndex =
         (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
@@ -297,21 +297,19 @@ private:
   }
 
   template <typename... Args>
-    requires(std::constructible_from<T, Args...> &&
+    requires(std::constructible_from<T, Args && ...> &&
              std::is_copy_assignable_v<T> && (!std::is_move_assignable_v<T>))
-  void
-  write_value(const auto writeIndex,
-              Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
+  void write_value(const auto writeIndex, Args &&...args) noexcept(
+      details::SPSC_NoThrow_Type<T, Args &&...>) {
     T copyOnly{std::forward<Args>(args)...};
     base_type::buffer_[writeIndex + base_type::padding] = copyOnly;
   }
 
   template <typename... Args>
-    requires(std::constructible_from<T, Args...> &&
+    requires(std::constructible_from<T, Args && ...> &&
              std::is_move_assignable_v<T>)
-  void
-  write_value(const auto writeIndex,
-              Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
+  void write_value(const auto writeIndex, Args &&...args) noexcept(
+      details::SPSC_NoThrow_Type<T, Args &&...>) {
     base_type::buffer_[writeIndex + base_type::padding] =
         T(std::forward<Args>(args)...);
   }
