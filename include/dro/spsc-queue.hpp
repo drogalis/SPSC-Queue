@@ -56,7 +56,7 @@ concept MAX_STACK_SIZE = (N < (MAX_BYTES_ON_STACK / sizeof(T)));
 // Memory Allocated on the Heap (Default Option)
 template <SPSC_Type T, typename Allocator = std::allocator<T>>
 struct HeapBuffer {
-  std::size_t capacity_;
+  const std::size_t capacity_;
   std::vector<T, Allocator> buffer_;
 
   static constexpr std::size_t padding = ((cacheLineSize - 1) / sizeof(T)) + 1;
@@ -65,19 +65,17 @@ struct HeapBuffer {
 
   explicit HeapBuffer(const std::size_t capacity,
                       const Allocator &allocator = Allocator())
-      : capacity_(capacity), buffer_(allocator) {
-    if (capacity_ < 1) {
+      // +1 prevents live lock e.g. reader and writer share 1 slot for size 1
+      : capacity_(capacity + 1), buffer_(allocator) {
+    if (capacity < 1) {
       throw std::logic_error("Capacity must be a positive number; Heap "
                              "allocations require capacity argument");
     }
     // (2 * padding) is for preventing cache contention between adjacent memory
-    // - 1 is for the ++capacity_ argument (rare overflow edge case)
-    if (capacity_ > MAX_SIZE_T - (2 * padding) - 1) {
+    if (capacity_ > MAX_SIZE_T - (2 * padding)) {
       throw std::overflow_error(
           "Capacity with padding exceeds std::size_t. Reduce size of queue.");
     }
-    ++capacity_; // prevents live lock e.g. reader and writer share 1 slot for
-                 // size 1
     buffer_.resize(capacity_ + (2 * padding));
   }
 
@@ -93,15 +91,13 @@ struct HeapBuffer {
 template <SPSC_Type T, std::size_t N, typename Allocator = std::allocator<T>>
 struct StackBuffer {
   static constexpr std::size_t padding = ((cacheLineSize - 1) / sizeof(T)) + 1;
-
-  std::size_t capacity_;
+  // +1 prevents live lock e.g. reader and writer share 1 slot for size 1
+  static constexpr std::size_t capacity_{N + 1};
   // (2 * padding) is for preventing cache contention between adjacent memory
-  std::array<T, N + (2 * padding) + 1> buffer_;
+  std::array<T, capacity_ + (2 * padding)> buffer_;
 
   explicit StackBuffer(const std::size_t capacity,
-                       const Allocator &allocator = Allocator())
-      : capacity_(N + 1) {
-    // Local capacity value
+                       const Allocator &allocator = Allocator()) {
     if (capacity) {
       throw std::invalid_argument(
           "Capacity in constructor is ignored for stack allocations");
@@ -129,15 +125,25 @@ private:
       std::conditional_t<N == 0, details::HeapBuffer<T, Allocator>,
                          details::StackBuffer<T, N>>;
 
-  alignas(details::cacheLineSize) std::atomic<std::size_t> readIndex_{0};
-  alignas(details::cacheLineSize) std::size_t readIndexCache_{0};
-  alignas(details::cacheLineSize) std::atomic<std::size_t> writeIndex_{0};
-  alignas(details::cacheLineSize) std::size_t writeIndexCache_{0};
+  struct alignas(details::cacheLineSize) WriterCacheLine {
+    std::atomic<std::size_t> writeIndex_{0};
+    std::size_t readIndexCache_{0};
+  } writer_;
+
+  struct alignas(details::cacheLineSize) ReaderCacheLine {
+    std::atomic<std::size_t> readIndex_{0};
+    std::size_t writeIndexCache_{0};
+    // This improves the performance of very small queues, and the writer uses
+    // the base_type::capacity_
+    std::size_t capacityCache_ {};
+  } reader_;
 
 public:
   explicit SPSCQueue(const std::size_t capacity = 0,
                      const Allocator &allocator = Allocator())
-      : base_type(capacity, allocator) {}
+      : base_type(capacity, allocator) {
+    reader_.capacityCache_ = base_type::capacity_;
+  }
 
   ~SPSCQueue() = default;
   // Non-Copyable and Non-Movable
@@ -150,44 +156,46 @@ public:
     requires std::constructible_from<T, Args...>
   void
   emplace(Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
-    auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
+    auto const writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     auto nextWriteIndex =
         (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
     // Loop while waiting for reader to catch up
-    while (nextWriteIndex == readIndexCache_) {
-      readIndexCache_ = readIndex_.load(std::memory_order_acquire);
+    while (nextWriteIndex == writer_.readIndexCache_) {
+      writer_.readIndexCache_ =
+          reader_.readIndex_.load(std::memory_order_acquire);
     }
     write_value(writeIndex, std::forward<Args>(args)...);
-    writeIndex_.store(nextWriteIndex, std::memory_order_release);
+    writer_.writeIndex_.store(nextWriteIndex, std::memory_order_release);
   }
 
   template <typename... Args>
     requires std::constructible_from<T, Args...>
   void force_emplace(Args &&...args) noexcept(
       details::SPSC_NoThrow_Type<T, Args...>) {
-    auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
+    auto const writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     auto nextWriteIndex =
         (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
     write_value(writeIndex, std::forward<Args>(args)...);
-    writeIndex_.store(nextWriteIndex, std::memory_order_release);
+    writer_.writeIndex_.store(nextWriteIndex, std::memory_order_release);
   }
 
   template <typename... Args>
     requires std::constructible_from<T, Args...>
   bool
   try_emplace(Args &&...args) noexcept(details::SPSC_NoThrow_Type<T, Args...>) {
-    auto const writeIndex = writeIndex_.load(std::memory_order_relaxed);
+    auto const writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     auto nextWriteIndex =
         (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
     // Check reader cache and if actually equal then fail to write
-    if (nextWriteIndex == readIndexCache_) {
-      readIndexCache_ = readIndex_.load(std::memory_order_acquire);
-      if (nextWriteIndex == readIndexCache_) {
+    if (nextWriteIndex == writer_.readIndexCache_) {
+      writer_.readIndexCache_ =
+          reader_.readIndex_.load(std::memory_order_acquire);
+      if (nextWriteIndex == writer_.readIndexCache_) {
         return false;
       }
     }
     write_value(writeIndex, std::forward<Args>(args)...);
-    writeIndex_.store(nextWriteIndex, std::memory_order_release);
+    writer_.writeIndex_.store(nextWriteIndex, std::memory_order_release);
     return true;
   }
 
@@ -223,25 +231,26 @@ public:
     return try_emplace(std::forward<P>(val));
   }
 
-  [[nodiscard]] bool try_pop(T &val) noexcept {
-    const auto readIndex = readIndex_.load(std::memory_order_relaxed);
+  [[nodiscard]] bool try_pop(T &val) noexcept(details::SPSC_NoThrow_Type<T>) {
+    const auto readIndex = reader_.readIndex_.load(std::memory_order_relaxed);
     // Check writer cache and if actually equal then fail to read
-    if (readIndex == writeIndexCache_) {
-      writeIndexCache_ = writeIndex_.load(std::memory_order_acquire);
-      if (readIndex == writeIndexCache_) {
+    if (readIndex == reader_.writeIndexCache_) {
+      reader_.writeIndexCache_ =
+          writer_.writeIndex_.load(std::memory_order_acquire);
+      if (readIndex == reader_.writeIndexCache_) {
         return false;
       }
     }
     val = read_value(readIndex);
     auto nextReadIndex =
-        (readIndex == base_type::capacity_ - 1) ? 0 : readIndex + 1;
-    readIndex_.store(nextReadIndex, std::memory_order_release);
+        (readIndex == reader_.capacityCache_ - 1) ? 0 : readIndex + 1;
+    reader_.readIndex_.store(nextReadIndex, std::memory_order_release);
     return true;
   }
 
   [[nodiscard]] std::size_t size() const noexcept {
-    auto writeIndex = writeIndex_.load(std::memory_order_acquire);
-    auto readIndex = readIndex_.load(std::memory_order_acquire);
+    auto writeIndex = writer_.writeIndex_.load(std::memory_order_acquire);
+    auto readIndex = reader_.readIndex_.load(std::memory_order_acquire);
     // This method prevents conversion to std::ptrdiff_t (a signed type)
     if (writeIndex >= readIndex) {
       return writeIndex - readIndex;
@@ -250,8 +259,8 @@ public:
   }
 
   [[nodiscard]] bool empty() const noexcept {
-    return writeIndex_.load(std::memory_order_acquire) ==
-           readIndex_.load(std::memory_order_acquire);
+    return writer_.writeIndex_.load(std::memory_order_acquire) ==
+           reader_.readIndex_.load(std::memory_order_acquire);
   }
 
   [[nodiscard]] std::size_t capacity() const noexcept {
@@ -267,7 +276,9 @@ private:
     return base_type::buffer_[readIndex + base_type::padding];
   }
 
-  T &&read_value(const auto readIndex) noexcept(details::SPSC_NoThrow_Type<T>) {
+  T &&read_value(const auto readIndex) noexcept(details::SPSC_NoThrow_Type<T>)
+    requires std::is_move_assignable_v<T>
+  {
     return std::move(base_type::buffer_[readIndex + base_type::padding]);
   }
 
