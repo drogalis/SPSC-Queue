@@ -68,10 +68,13 @@ int main(int argc, char *argv[]) {
 
   // Stack Allocated Queue
   {
-    constexpr int size{10};
+    const int size{10};
     dro::SPSCQueue<int, size> queue;
     int val{};
     assert(!queue.try_pop(val));
+    assert(!queue.size());
+    assert(queue.empty());
+    assert(queue.capacity() == 10);
     for (int i {}; i < size; i++) {
       queue.push(i);
     }
