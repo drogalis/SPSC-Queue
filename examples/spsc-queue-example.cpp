@@ -20,8 +20,9 @@ int main(int argc, char *argv[]) {
   auto thrd = std::thread([&] {
     for (int i{}; i < iter; ++i) {
       int val{};
-      while (!queue.try_pop(val)) {
-      }
+      queue.pop(val);
+      // Can also try_pop
+      // while (!queue.try_pop(val)) {}
     }
   });
 
