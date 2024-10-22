@@ -34,7 +34,7 @@ dro::SPSCQueue<T, size> queue;
 dro::SPSCQueue<T, 0, Allocator<T>> queue(size, allocator);
 ```
 
-Note: Allocate small queues on the stack, under 2MBs.
+Note: Stack allocation size hard coded at 2MBs to prevent stack overflow.
 
 #### Constructor
 
@@ -54,7 +54,7 @@ Note: Allocate small queues on the stack, under 2MBs.
 
   **Note: If writer surpasses reader, the entire queue will be erased. Use with caution.**
 
-- `bool try_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>);`
+- `[[nodiscard]] bool try_emplace(Args&&... args) noexcept(SPSC_NoThrow_Type<T, Args...>);`
 
   Returns bool, and constructs type in place. Fails to write if the queue is full.
 
@@ -72,7 +72,11 @@ Note: Allocate small queues on the stack, under 2MBs.
 
   Returns bool, and fails to write if the queue is full.
 
-- `[[nodiscard]] bool try_pop(T& val) noexcept;`
+- `void pop(T& val) noexcept(SPSC_NoThrow_Type<T>);`
+
+  Waits on writer if the queue is empty.
+
+- `[[nodiscard]] bool try_pop(T& val) noexcept(SPSC_NoThrow_Type<T>);`
 
   Returns bool, and fails to read if the queue is empty.
 
