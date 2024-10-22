@@ -51,7 +51,7 @@ concept SPSC_NoThrow_Type =
 
 // Prevents Stack Overflow
 template <typename T, std::size_t N>
-concept MAX_STACK_SIZE = (N < (MAX_BYTES_ON_STACK / sizeof(T)));
+concept MAX_STACK_SIZE = (N <= (MAX_BYTES_ON_STACK / sizeof(T)));
 
 // Memory Allocated on the Heap (Default Option)
 template <SPSC_Type T, typename Allocator = std::allocator<T>>
@@ -90,9 +90,9 @@ struct HeapBuffer {
 // Memory Allocated on the Stack
 template <SPSC_Type T, std::size_t N, typename Allocator = std::allocator<T>>
 struct StackBuffer {
-  static constexpr std::size_t padding = ((cacheLineSize - 1) / sizeof(T)) + 1;
   // +1 prevents live lock e.g. reader and writer share 1 slot for size 1
   static constexpr std::size_t capacity_{N + 1};
+  static constexpr std::size_t padding = ((cacheLineSize - 1) / sizeof(T)) + 1;
   // (2 * padding) is for preventing cache contention between adjacent memory
   std::array<T, capacity_ + (2 * padding)> buffer_;
 
@@ -124,17 +124,19 @@ private:
   using base_type =
       std::conditional_t<N == 0, details::HeapBuffer<T, Allocator>,
                          details::StackBuffer<T, N>>;
+  static constexpr bool nothrow_v = details::SPSC_NoThrow_Type<T>;
 
   struct alignas(details::cacheLineSize) WriterCacheLine {
     std::atomic<std::size_t> writeIndex_{0};
     std::size_t readIndexCache_{0};
+    // Reduces cache contention on very small queues
+    const size_t paddingCache_ = base_type::padding;
   } writer_;
 
   struct alignas(details::cacheLineSize) ReaderCacheLine {
     std::atomic<std::size_t> readIndex_{0};
     std::size_t writeIndexCache_{0};
-    // This improves the performance of very small queues, and the writer uses
-    // the base_type::capacity_
+    // Reduces cache contention on very small queues
     std::size_t capacityCache_{};
   } reader_;
 
@@ -181,7 +183,7 @@ public:
 
   template <typename... Args>
     requires std::constructible_from<T, Args &&...>
-  bool try_emplace(Args &&...args) noexcept(
+  [[nodiscard]] bool try_emplace(Args &&...args) noexcept(
       details::SPSC_NoThrow_Type<T, Args &&...>) {
     auto const writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     auto nextWriteIndex =
@@ -199,9 +201,7 @@ public:
     return true;
   }
 
-  void push(const T &val) noexcept(details::SPSC_NoThrow_Type<T>) {
-    emplace(val);
-  }
+  void push(const T &val) noexcept(nothrow_v) { emplace(val); }
 
   template <typename P>
     requires std::constructible_from<T, P &&>
@@ -209,9 +209,7 @@ public:
     emplace(std::forward<P>(val));
   }
 
-  void force_push(const T &val) noexcept(details::SPSC_NoThrow_Type<T>) {
-    force_emplace(val);
-  }
+  void force_push(const T &val) noexcept(nothrow_v) { force_emplace(val); }
 
   template <typename P>
     requires std::constructible_from<T, P &&>
@@ -219,8 +217,7 @@ public:
     force_emplace(std::forward<P>(val));
   }
 
-  [[nodiscard]] bool
-  try_push(const T &val) noexcept(details::SPSC_NoThrow_Type<T>) {
+  [[nodiscard]] bool try_push(const T &val) noexcept(nothrow_v) {
     return try_emplace(val);
   }
 
@@ -231,7 +228,20 @@ public:
     return try_emplace(std::forward<P>(val));
   }
 
-  [[nodiscard]] bool try_pop(T &val) noexcept(details::SPSC_NoThrow_Type<T>) {
+  void pop(T &val) noexcept(nothrow_v) {
+    const auto readIndex = reader_.readIndex_.load(std::memory_order_relaxed);
+    // Loop while waiting for writer to enqueue
+    while (readIndex == reader_.writeIndexCache_) {
+      reader_.writeIndexCache_ =
+          writer_.writeIndex_.load(std::memory_order_acquire);
+    }
+    val = read_value(readIndex);
+    auto nextReadIndex =
+        (readIndex == reader_.capacityCache_ - 1) ? 0 : readIndex + 1;
+    reader_.readIndex_.store(nextReadIndex, std::memory_order_release);
+  }
+
+  [[nodiscard]] bool try_pop(T &val) noexcept(nothrow_v) {
     const auto readIndex = reader_.readIndex_.load(std::memory_order_relaxed);
     // Check writer cache and if actually equal then fail to read
     if (readIndex == reader_.writeIndexCache_) {
@@ -270,30 +280,28 @@ public:
 private:
   // Note: The "+ padding" is a constant offset used to prevent false sharing
   // with memory in front of the SPSC allocations
-  T &read_value(const auto readIndex) noexcept(details::SPSC_NoThrow_Type<T>)
+  T &read_value(const auto readIndex) noexcept(nothrow_v)
     requires std::is_copy_assignable_v<T> && (!std::is_move_assignable_v<T>)
   {
     return base_type::buffer_[readIndex + base_type::padding];
   }
 
-  T &&read_value(const auto readIndex) noexcept(details::SPSC_NoThrow_Type<T>)
+  T &&read_value(const auto readIndex) noexcept(nothrow_v)
     requires std::is_move_assignable_v<T>
   {
     return std::move(base_type::buffer_[readIndex + base_type::padding]);
   }
 
-  void write_value(const auto writeIndex,
-                   T val) noexcept(details::SPSC_NoThrow_Type<T>)
+  void write_value(const auto writeIndex, T val) noexcept(nothrow_v)
     requires std::is_copy_assignable_v<T> && (!std::is_move_assignable_v<T>)
   {
-    base_type::buffer_[writeIndex + base_type::padding] = val;
+    base_type::buffer_[writeIndex + writer_.paddingCache_] = val;
   }
 
-  void write_value(const auto writeIndex,
-                   T val) noexcept(details::SPSC_NoThrow_Type<T>)
+  void write_value(const auto writeIndex, T val) noexcept(nothrow_v)
     requires std::is_move_assignable_v<T>
   {
-    base_type::buffer_[writeIndex + base_type::padding] = std::move(val);
+    base_type::buffer_[writeIndex + writer_.paddingCache_] = std::move(val);
   }
 
   template <typename... Args>
@@ -302,7 +310,7 @@ private:
   void write_value(const auto writeIndex, Args &&...args) noexcept(
       details::SPSC_NoThrow_Type<T, Args &&...>) {
     T copyOnly{std::forward<Args>(args)...};
-    base_type::buffer_[writeIndex + base_type::padding] = copyOnly;
+    base_type::buffer_[writeIndex + writer_.paddingCache_] = copyOnly;
   }
 
   template <typename... Args>
@@ -310,7 +318,7 @@ private:
              std::is_move_assignable_v<T>)
   void write_value(const auto writeIndex, Args &&...args) noexcept(
       details::SPSC_NoThrow_Type<T, Args &&...>) {
-    base_type::buffer_[writeIndex + base_type::padding] =
+    base_type::buffer_[writeIndex + writer_.paddingCache_] =
         T(std::forward<Args>(args)...);
   }
 };
