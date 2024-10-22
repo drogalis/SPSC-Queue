@@ -37,9 +37,12 @@ int main(int argc, char *argv[]) {
     assert(queue.try_emplace(1));
     assert(!queue.try_emplace(1));
     assert(queue.size() == 10);
+    queue.pop(val);
+    assert(queue.size() == 9);
     int forceVal{10};
-    queue.force_emplace(forceVal);
-    queue.force_emplace(forceVal);
+    for (int i{}; i < size; i++) {
+      queue.force_emplace(forceVal);
+    }
     assert(queue.try_pop(val));
     assert(val == forceVal);
   }
@@ -50,7 +53,7 @@ int main(int argc, char *argv[]) {
     dro::SPSCQueue<int> queue{size};
     int val{};
     assert(!queue.try_pop(val));
-    for (int i {}; i < size; i++) {
+    for (int i{}; i < size; i++) {
       queue.push(i);
     }
     assert(queue.try_pop(val));
@@ -59,9 +62,12 @@ int main(int argc, char *argv[]) {
     assert(queue.try_push(1));
     assert(!queue.try_push(1));
     assert(queue.size() == 10);
+    queue.pop(val);
+    assert(queue.size() == 9);
     int forceVal{10};
-    queue.force_push(forceVal);
-    queue.force_push(forceVal);
+    for (int i{}; i < size; i++) {
+      queue.force_push(forceVal);
+    }
     assert(queue.try_pop(val));
     assert(val == forceVal);
   }
@@ -75,7 +81,7 @@ int main(int argc, char *argv[]) {
     assert(!queue.size());
     assert(queue.empty());
     assert(queue.capacity() == 10);
-    for (int i {}; i < size; i++) {
+    for (int i{}; i < size; i++) {
       queue.push(i);
     }
     assert(queue.try_pop(val));
@@ -84,9 +90,12 @@ int main(int argc, char *argv[]) {
     assert(queue.try_push(1));
     assert(!queue.try_push(1));
     assert(queue.size() == 10);
+    queue.pop(val);
+    assert(queue.size() == 9);
     int forceVal{10};
-    queue.force_push(forceVal);
-    queue.force_push(forceVal);
+    for (int i{}; i < size; i++) {
+      queue.force_push(forceVal);
+    }
     assert(queue.try_pop(val));
     assert(val == forceVal);
   }
@@ -97,7 +106,7 @@ int main(int argc, char *argv[]) {
       int x_;
       int y_;
       Test() = default;
-      Test(int x, int y) : x_(x), y_(y) {} 
+      Test(int x, int y) : x_(x), y_(y) {}
       ~Test() = default;
       Test(const Test &) = default;
       Test &operator=(const Test &) = default;
@@ -169,7 +178,7 @@ int main(int argc, char *argv[]) {
     try {
       dro::SPSCQueue<int, 10> queue(10);
       assert(false); // Should never be called
-    } catch (std::logic_error &e) {
+    } catch (std::invalid_argument &e) {
       assert(true); // Should always be called
     }
   }
