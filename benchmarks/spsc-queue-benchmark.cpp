@@ -92,8 +92,7 @@ int main(int argc, char *argv[]) {
         pinThread(cpu1);
         for (int i{}; i < iters; ++i) {
           TestSize val;
-          while (!queue.try_pop(val)) {
-          }
+          queue.pop(val);
           if (val.x_ != i) {
             throw std::runtime_error("Value not equal");
           }
@@ -121,8 +120,7 @@ int main(int argc, char *argv[]) {
         pinThread(cpu1);
         for (int i{}; i < iters; ++i) {
           TestSize val;
-          while (!q1.try_pop(val)) {
-          }
+          q1.pop(val);
           q2.emplace(val);
         }
       });
@@ -133,8 +131,7 @@ int main(int argc, char *argv[]) {
       for (int i{}; i < iters; ++i) {
         q1.emplace(TestSize(i));
         TestSize val;
-        while (!q2.try_pop(val)) {
-        }
+        q2.pop(val);
       }
       auto stop = std::chrono::steady_clock::now();
       thrd.join();
