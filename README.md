@@ -31,7 +31,7 @@ dro::SPSCQueue<T> queue(size);
 // Stack Allocation
 dro::SPSCQueue<T, size> queue;
 // Custom Allocator on the Heap
-dro::SPSCQueue<T, 0, Allocator<T>> queue(size);
+dro::SPSCQueue<T, 0, Allocator<T>> queue(size, allocator);
 ```
 
 Note: Allocate small queues on the stack, under 2MBs.
