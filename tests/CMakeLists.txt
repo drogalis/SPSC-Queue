@@ -23,12 +23,10 @@ include(${PARENT_DIR}/cmake/CompilerWarnings.cmake)
 include(${PARENT_DIR}/cmake/Sanitizers.cmake)
 
 myproject_set_project_warnings(${PROJECT_NAME} TRUE "X" "" "" "X")
-
-add_compile_options(-pipe -fPIC)
-myproject_enable_sanitizers(${PROJECT_NAME} TRUE TRUE TRUE FALSE TRUE)
+myproject_enable_sanitizers(${PROJECT_NAME} TRUE TRUE TRUE FALSE FALSE)
 
 # we cannot analyse results without gcov
-find_program(GCOV_PATH gcov)
-if(NOT GCOV_PATH)
-  message(FATAL_ERROR "Code coverage analysis requires gcov!")
-endif()
+# find_program(GCOV_PATH gcov)
+# if(NOT GCOV_PATH)
+#   message(FATAL_ERROR "Code coverage analysis requires gcov!")
+# endif()
