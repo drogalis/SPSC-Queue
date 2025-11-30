@@ -39,8 +39,7 @@ static constexpr std::size_t MAX_BYTES_ON_STACK = 2'097'152; // 2 MBs
 
 template <typename T>
 concept SPSC_Type =
-    std::is_default_constructible<T>::value &&
-    std::is_nothrow_destructible<T>::value &&
+    std::is_default_constructible_v<T> && std::is_nothrow_destructible_v<T> &&
     (std::is_move_assignable_v<T> || std::is_copy_assignable_v<T>);
 
 template <typename T, typename... Args>
@@ -161,6 +160,7 @@ public:
     const auto writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     const auto nextWriteIndex =
         (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
+
     // Loop while waiting for reader to catch up
     while (nextWriteIndex == writer_.readIndexCache_) {
       writer_.readIndexCache_ =
@@ -177,6 +177,7 @@ public:
     const auto writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     const auto nextWriteIndex =
         (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
+
     write_value(writeIndex, std::forward<Args>(args)...);
     writer_.writeIndex_.store(nextWriteIndex, std::memory_order_release);
   }
@@ -188,6 +189,7 @@ public:
     const auto writeIndex = writer_.writeIndex_.load(std::memory_order_relaxed);
     const auto nextWriteIndex =
         (writeIndex == base_type::capacity_ - 1) ? 0 : writeIndex + 1;
+
     // Check reader cache and if actually equal then fail to write
     if (nextWriteIndex == writer_.readIndexCache_) {
       writer_.readIndexCache_ =
@@ -230,12 +232,14 @@ public:
 
   void pop(T &val) noexcept(nothrow_v) {
     const auto readIndex = reader_.readIndex_.load(std::memory_order_relaxed);
+
     // Loop while waiting for writer to enqueue
     while (readIndex == reader_.writeIndexCache_) {
       reader_.writeIndexCache_ =
           writer_.writeIndex_.load(std::memory_order_acquire);
     }
-    val = read_value(readIndex);
+    read_value(readIndex, val);
+
     const auto nextReadIndex =
         (readIndex == reader_.capacityCache_ - 1) ? 0 : readIndex + 1;
     reader_.readIndex_.store(nextReadIndex, std::memory_order_release);
@@ -243,6 +247,7 @@ public:
 
   [[nodiscard]] bool try_pop(T &val) noexcept(nothrow_v) {
     const auto readIndex = reader_.readIndex_.load(std::memory_order_relaxed);
+
     // Check writer cache and if actually equal then fail to read
     if (readIndex == reader_.writeIndexCache_) {
       reader_.writeIndexCache_ =
@@ -251,7 +256,8 @@ public:
         return false;
       }
     }
-    val = read_value(readIndex);
+
+    read_value(readIndex, val);
     const auto nextReadIndex =
         (readIndex == reader_.capacityCache_ - 1) ? 0 : readIndex + 1;
     reader_.readIndex_.store(nextReadIndex, std::memory_order_release);
@@ -261,6 +267,7 @@ public:
   [[nodiscard]] std::size_t size() const noexcept {
     const auto writeIndex = writer_.writeIndex_.load(std::memory_order_acquire);
     const auto readIndex = reader_.readIndex_.load(std::memory_order_acquire);
+
     // This method prevents conversion to std::ptrdiff_t (a signed type)
     if (writeIndex >= readIndex) {
       return writeIndex - readIndex;
@@ -280,46 +287,32 @@ public:
 private:
   // Note: The "+ padding" is a constant offset used to prevent false sharing
   // with memory in front of the SPSC allocations
-  T &read_value(const auto &readIndex) noexcept(nothrow_v)
-    requires std::is_copy_assignable_v<T> && (!std::is_move_assignable_v<T>)
-  {
-    return base_type::buffer_[readIndex + base_type::padding];
+  void read_value(std::size_t readIndex, T &val) noexcept(nothrow_v) {
+    if constexpr (std::is_move_assignable_v<T>) {
+      val = std::move(base_type::buffer_[readIndex + base_type::padding]);
+    } else {
+      val = base_type::buffer_[readIndex + base_type::padding];
+    }
   }
 
-  T &&read_value(const auto &readIndex) noexcept(nothrow_v)
-    requires std::is_move_assignable_v<T>
-  {
-    return std::move(base_type::buffer_[readIndex + base_type::padding]);
-  }
-
-  void write_value(const auto &writeIndex, T &val) noexcept(nothrow_v)
-    requires std::is_copy_assignable_v<T> && (!std::is_move_assignable_v<T>)
-  {
-    base_type::buffer_[writeIndex + writer_.paddingCache_] = val;
-  }
-
-  void write_value(const auto &writeIndex, T &&val) noexcept(nothrow_v)
-    requires std::is_move_assignable_v<T>
-  {
-    base_type::buffer_[writeIndex + writer_.paddingCache_] = std::move(val);
-  }
-
-  template <typename... Args>
-    requires(std::constructible_from<T, Args && ...> &&
-             std::is_copy_assignable_v<T> && (!std::is_move_assignable_v<T>))
-  void write_value(const auto &writeIndex, Args &&...args) noexcept(
-      details::SPSC_NoThrow_Type<T, Args &&...>) {
-    T copyOnly{std::forward<Args>(args)...};
-    base_type::buffer_[writeIndex + writer_.paddingCache_] = copyOnly;
-  }
-
-  template <typename... Args>
-    requires(std::constructible_from<T, Args && ...> &&
-             std::is_move_assignable_v<T>)
-  void write_value(const auto &writeIndex, Args &&...args) noexcept(
-      details::SPSC_NoThrow_Type<T, Args &&...>) {
+  template <typename U>
+    requires(std::same_as<T, U>)
+  void write_value(std::size_t writeIndex, U &&val) noexcept(nothrow_v) {
     base_type::buffer_[writeIndex + writer_.paddingCache_] =
-        T(std::forward<Args>(args)...);
+        std::forward<U>(val);
+  }
+
+  template <typename... Args>
+    requires(std::constructible_from<T, Args && ...>)
+  void write_value(std::size_t writeIndex, Args &&...args) noexcept(
+      details::SPSC_NoThrow_Type<T, Args &&...>) {
+    if constexpr (std::is_move_assignable_v<T>) {
+      base_type::buffer_[writeIndex + writer_.paddingCache_] =
+          T(std::forward<Args>(args)...);
+    } else {
+      T copyOnly{std::forward<Args>(args)...};
+      base_type::buffer_[writeIndex + writer_.paddingCache_] = copyOnly;
+    }
   }
 };
 
